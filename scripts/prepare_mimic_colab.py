@@ -80,22 +80,28 @@ def prepare_mimic_data():
                 dicom_id = os.path.splitext(file)[0]
                 image_paths[dicom_id] = os.path.join(root, file)
                 
-    # Quét tất cả file báo cáo đã giải nén
-    print("Đang quét cấu trúc file Báo cáo...")
+    print("Đang quét Danh sách Báo cáo (Bước này tốn xíu thời gian quét list)...")
     report_texts = {}
+    
+    # Gom tất cả file txt vào một mảng trước để chạy Thanh tiến trình TQDM 1 lần duy nhất
+    all_report_files = []
     for root, _, files in os.walk(reports_unzip_dir):
-        for file in tqdm(files, desc="Đang phân tích Ngữ Nghĩa Text"):
+        for file in files:
             if file.endswith(".txt"):
-                study_id = os.path.splitext(file)[0]
-                # Ở MIMIC, file text hay có tiền tố 's' ví dụ 's50414267.txt'
-                if study_id.startswith('s'):
-                    study_id = study_id[1:]
-                try:    
-                    with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
-                        text = f.read()
-                        report_texts[int(study_id)] = clean_report_text(text)
-                except Exception:
-                    pass
+                all_report_files.append(os.path.join(root, file))
+                
+    for filepath in tqdm(all_report_files, desc="Đang đúc kết Ngữ Nghĩa Text"):
+        file = os.path.basename(filepath)
+        study_id = os.path.splitext(file)[0]
+        # Ở MIMIC, file text hay có tiền tố 's' ví dụ 's50414267.txt'
+        if study_id.startswith('s'):
+            study_id = study_id[1:]
+        try:    
+            with open(filepath, 'r', encoding='utf-8') as f:
+                text = f.read()
+                report_texts[int(study_id)] = clean_report_text(text)
+        except Exception:
+            pass
 
     print("\n--- BƯỚC 4: LẮP RÁP (JOIN) ẢNH VÀ BÁO CÁO THÀNH DATASET CHUẨN ---")
     # Giữ nguyên logic của hệ thống cũ: Yêu cầu file CSV cột 1: 'image_path', cột 2: 'report'
