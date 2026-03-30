@@ -12,12 +12,14 @@ model:
   temperature: 0.07
 
 training:
-  batch_size: 32
-  epochs: 1           # <--- Đổi về số 1 để chạy thử 1 vòng
+  batch_size: 8              # <--- Nạp 8 ảnh/lượt
+  gradient_accumulation_steps: 4 # <--- Chạy 4 lượt mới cập nhật (Tổng = 32)
+  epochs: 1                  # <--- Vẫn để 1 để test xem nó chạy ổn không
   lr: 0.0001
   weight_decay: 0.01
   num_workers: 2
-  max_steps_per_epoch: 500  # <--- Giảm xuống 500 bước cho nó chạy siêu lẹ (tầm 10 phút)
+  max_steps_per_epoch: 500  
   log_every_n_steps: 10
   checkpoint_dir: "checkpoints/"
+
 

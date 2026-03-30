@@ -27,8 +27,9 @@ class MultimodalTrainer:
         self.model.train()
         total_loss = 0
         
-        # Giới hạn số bước nếu config có yêu cầu (để chạy 50 epoch nhanh)
         max_steps = self.config['training'].get('max_steps_per_epoch', None)
+        # Lấy số bước tích lũy từ config (mặc định là 1 nếu không có)
+        accum_steps = self.config['training'].get('gradient_accumulation_steps', 1)
         
         pbar = tqdm(dataloader, desc=f"Epoch {epoch} Training")
         for i, batch in enumerate(pbar):
@@ -40,25 +41,29 @@ class MultimodalTrainer:
             attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
             cluster_ids = batch['cluster_id'].to(self.device, non_blocking=True)
             
-            self.optimizer.zero_grad()
-            
-            # --- TỐI ƯU CỰC MẠNH: Dùng Autocast cho FP16 ---
+            # --- TỐI ƯU: Mixed Precision + Accumulation ---
             device_type = 'cuda' if 'cuda' in str(self.device) else 'cpu'
             with torch.amp.autocast(device_type=device_type):
                 img_embeds, txt_embeds = self.model(images, input_ids, attention_mask)
                 loss = self.criterion(img_embeds, txt_embeds, cluster_ids)
+                # Chia loss cho số bước tích lũy
+                loss = loss / accum_steps
             
-            # Backward với Scaler để tránh lỗi tràn số khi dùng FP16
             if self.scaler:
                 self.scaler.scale(loss).backward()
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+                # Chỉ cập nhật trọng số sau mỗi accum_steps
+                if (i + 1) % accum_steps == 0:
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                    self.optimizer.zero_grad()
             else:
                 loss.backward()
-                self.optimizer.step()
+                if (i + 1) % accum_steps == 0:
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
             
-            total_loss += loss.item()
-            pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
+            total_loss += loss.item() * accum_steps
+            pbar.set_postfix({"Loss": f"{loss.item() * accum_steps:.4f}"})
             
         avg_loss = total_loss / (max_steps if max_steps else len(dataloader))
         print(f"✅ Hết Epoch {epoch} - Trung bình Loss: {avg_loss:.4f}")

@@ -32,8 +32,8 @@ class ClusteringGuidedContrastiveLoss(nn.Module):
         
         # Áp dụng masking: Set logits của false negatives thành 1 số cực nhỏ (-1e9)
         # Các mẫu này sẽ không đóng góp vào gradient đẩy ở mẫu số hàm Softmax (giảm thiểu hình phạt đối với cụm)
-        logits_per_image = logits_per_image.masked_fill(false_negative_mask.bool(), -1e9)
-        logits_per_text = logits_per_text.masked_fill(false_negative_mask.bool(), -1e9)
+        logits_per_image = logits_per_image.masked_fill(false_negative_mask.bool(), -10000.0)
+        logits_per_text = logits_per_text.masked_fill(false_negative_mask.bool(), -10000.0)
         
         # Target cho hàm cross-entropy vẫn là index của đường chéo chính [0, 1, ..., N-1]
         labels = torch.arange(batch_size, dtype=torch.long, device=device)
