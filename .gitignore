@@ -1,0 +1,14 @@
+# Bỏ qua toàn bộ nội dung dữ liệu siêu nặng
+data/raw/images/*
+data/raw/reports/*
+*.tgz
+*.zip
+
+# Giữ lại folder rỗng
+!data/raw/images/.gitkeep
+!data/raw/reports/.gitkeep
+
+# Môi trường ảo, cache AI...
+__pycache__/
+.venv/
+checkpoints/

@@ -1,0 +1,12 @@
+torch
+transformers
+timm
+pandas
+numpy
+pillow
+scikit-learn
+pyyaml
+tqdm
+requests
+sentence-transformers
+torchvision
