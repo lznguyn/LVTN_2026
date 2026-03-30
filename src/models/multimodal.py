@@ -5,10 +5,11 @@ from .text_encoder import MedicalTextEncoder
 from .projection import ProjectionHead
 
 class MultimodalModel(nn.Module):
-    def __init__(self, embed_dim=512):
+    def __init__(self, image_encoder_name, text_model_name, embed_dim=512):
         super().__init__()
-        self.image_encoder = SwinTransformerV2Encoder()
-        self.text_encoder = MedicalTextEncoder()
+        self.image_encoder = SwinTransformerV2Encoder(model_name=image_encoder_name)
+        self.text_model_name = text_model_name # Lưu lại để dùng nếu cần
+        self.text_encoder = MedicalTextEncoder(model_name=text_model_name)
         
         # Ánh xạ cả 2 không gian đặc trưng về cùng 1 số chiều (embed_dim = d)
         self.image_proj = ProjectionHead(self.image_encoder.feature_dim, embed_dim)

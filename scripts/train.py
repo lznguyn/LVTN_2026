@@ -64,7 +64,11 @@ def main():
     
     # 2. GIAI ĐOẠN KHỞI TẠO NEURAL NETWORK
     print("\n[3] 🏗️ Đang xây dựng cấu trúc Mạng Neuron (Swin Transformer V2 + ClinicalBERT + MLP)...")
-    model = MultimodalModel(embed_dim=config['model']['embed_dim'])
+    model = MultimodalModel(
+        image_encoder_name=config['model']['image_encoder'],
+        text_model_name=config['model']['text_encoder'],
+        embed_dim=config['model']['embed_dim']
+    )
     
     print(f"Tổng số tham số mạng lưu giữ: {sum(p.numel() for p in model.parameters() if p.requires_grad):,} Parameters")
     

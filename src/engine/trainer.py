@@ -9,14 +9,16 @@ class MultimodalTrainer:
         self.device = device
         self.config = config
         
-        # Khởi tạo thuật toán Toán học tối ưu (Optimizer) để cập nhật độ dốc
+        # Thêm GradScaler để dùng Mixed Precision (FP16) tăng tốc x2
+        self.scaler = torch.amp.GradScaler('cuda') if device == 'cuda' else None
+        
+        # Khởi tạo thuật toán Toán học tối ưu (Optimizer)
         self.optimizer = optim.AdamW(
             self.model.parameters(), 
             lr=float(config['training']['lr']), 
             weight_decay=float(config['training']['weight_decay'])
         )
         
-        # Hàm lõi để bỏ đi âm tính giả (Nhân tố then chốt cho đề tài của bạn)
         self.criterion = ClusteringGuidedContrastiveLoss(
             temperature=config['model']['temperature']
         ).to(device)
@@ -25,34 +27,41 @@ class MultimodalTrainer:
         self.model.train()
         total_loss = 0
         
+        # Giới hạn số bước nếu config có yêu cầu (để chạy 50 epoch nhanh)
+        max_steps = self.config['training'].get('max_steps_per_epoch', None)
+        
         pbar = tqdm(dataloader, desc=f"Epoch {epoch} Training")
-        for batch in pbar:
-            # 1. Đưa dữ liệu qua Card Đồ họa (GPU) để tăng tốc nếu có
+        for i, batch in enumerate(pbar):
+            if max_steps and i >= max_steps:
+                break
+                
             images = batch['image'].to(self.device, non_blocking=True)
             input_ids = batch['input_ids'].to(self.device, non_blocking=True)
             attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
             cluster_ids = batch['cluster_id'].to(self.device, non_blocking=True)
             
-            # Xóa các độ lớn gradient thặng dư của batch trước
             self.optimizer.zero_grad()
             
-            # 2. Truyền xuôi Model (Forward Pass)
-            img_embeds, txt_embeds = self.model(
-                images, input_ids, attention_mask
-            )
+            # --- TỐI ƯU CỰC MẠNH: Dùng Autocast cho FP16 ---
+            device_type = 'cuda' if 'cuda' in str(self.device) else 'cpu'
+            with torch.amp.autocast(device_type=device_type):
+                img_embeds, txt_embeds = self.model(images, input_ids, attention_mask)
+                loss = self.criterion(img_embeds, txt_embeds, cluster_ids)
             
-            # 3. Tính hàm mất mát
-            loss = self.criterion(img_embeds, txt_embeds, cluster_ids)
-            
-            # 4. Lan truyền ngược (Backward Pass)
-            loss.backward()
-            self.optimizer.step()
+            # Backward với Scaler để tránh lỗi tràn số khi dùng FP16
+            if self.scaler:
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                loss.backward()
+                self.optimizer.step()
             
             total_loss += loss.item()
             pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
             
-        avg_loss = total_loss / len(dataloader)
-        print(f"✅ Hết Epoch {epoch} - Trung bình Loss huấn luyện: {avg_loss:.4f}")
+        avg_loss = total_loss / (max_steps if max_steps else len(dataloader))
+        print(f"✅ Hết Epoch {epoch} - Trung bình Loss: {avg_loss:.4f}")
         return avg_loss
 
     def validate(self, dataloader, epoch):

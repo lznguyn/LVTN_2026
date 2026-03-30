@@ -5,7 +5,7 @@ import timm
 class SwinTransformerV2Encoder(nn.Module):
     def __init__(
         self,
-        model_name='swinv2_base_window12to16_192to256.ms_in22k_ft_in1k',
+        model_name='swinv2_base_window12to16_192to256',
         pretrained=True
     ):
         super().__init__()
