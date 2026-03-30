@@ -2,7 +2,7 @@
 data:
   train_csv: "data/splits/train.csv"
   val_csv: "data/splits/val.csv"
-  image_size: 224
+  image_size: 256
   max_text_length: 128
 
 model:
