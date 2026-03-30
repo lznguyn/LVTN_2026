@@ -46,28 +46,17 @@ def evaluate_retrieval(model, dataloader, device):
         all_txt_embeds.append(txt_embeds.cpu())
         all_reports.extend(batch['raw_report'])
 
-    # Chuyển thành Tensor khổng lồ
     img_embeds = torch.cat(all_img_embeds, dim=0)
     txt_embeds = torch.cat(all_txt_embeds, dim=0)
-    
     num_samples = img_embeds.size(0)
     print(f"✅ Đã trích xuất xong {num_samples} mẫu.")
 
-    print("\n--- [2] TÍNH TOÁN MA TRẬN TƯƠNG ĐỒNG (SIMILARITY MATRIX) ---")
-    # Di chuyển lên GPU để tính toán cho nhanh (Nếu dữ liệu quá lớn > 50k mẫu thì dùng CPU hoặc Chunking)
-    img_embeds = img_embeds.to(device)
-    txt_embeds = txt_embeds.to(device)
+    print("\n--- [2] TÍNH TOÁN RECALL@K THEO PHƯƠNG PHÁP CHUNKING (TIẾT KIỆM RAM) ---")
     
-    # Tính tích vô hướng (Dot product) vì vector đã được chuẩn hóa L2 -> kết quả là Cosine Similarity
-    sim_matrix = torch.matmul(img_embeds, txt_embeds.t())
-    
-    # --- IMAGE-TO-TEXT (I2T) RETRIEVAL ---
-    print("\n--- [3] KẾT QUẢ IMAGE-TO-TEXT (ẢNH TÌM VĂN BẢN) ---")
-    i2t_r1, i2t_r5, i2t_r10 = calculate_recall(sim_matrix, axis=1)
-    
-    # --- TEXT-TO-IMAGE (T2I) RETRIEVAL ---
-    print("\n--- [4] KẾT QUẢ TEXT-TO-IMAGE (VĂN BẢN TÌM ẢNH) ---")
-    t2i_r1, t2i_r5, t2i_r10 = calculate_recall(sim_matrix, axis=0)
+    # Image-to-Text
+    i2t_r1, i2t_r5, i2t_r10 = calculate_recall_chunked(img_embeds, txt_embeds, device, axis=1)
+    # Text-to-Image
+    t2i_r1, t2i_r5, t2i_r10 = calculate_recall_chunked(txt_embeds, img_embeds, device, axis=1)
 
     print("\n" + "="*50)
     print(f"📊 KẾT QUẢ CUỐI CÙNG (RECALL @ K)")
@@ -76,40 +65,41 @@ def evaluate_retrieval(model, dataloader, device):
     print(f"🔹 Text-to-Image: R@1: {t2i_r1:.2f}% | R@5: {t2i_r5:.2f}% | R@10: {t2i_r10:.2f}%")
     print("="*50)
 
-    # In ra 3 ví dụ demo
+    # In 3 mẫu demo (Tận dụng chunk đầu tiên để lấy similarity) 
     print("\n👁️ VÍ DỤ TRUY VẤN DEMO (I2T):")
+    sample_sim = torch.matmul(img_embeds[:10].to(device), txt_embeds.to(device).t())
     for i in range(3):
-        idx = np.random.randint(0, num_samples)
-        top5_indices = torch.topk(sim_matrix[idx], 5).indices.cpu().numpy()
-        print(f"\n[Mẫu {idx}] Văn bản gốc: {all_reports[idx][:100]}...")
+        top5_indices = torch.topk(sample_sim[i], 5).indices.cpu().numpy()
+        print(f"\n[Mẫu {i}] Văn bản gốc: {all_reports[i][:100]}...")
         print(f"Top 1 Dự đoán: {all_reports[top5_indices[0]][:100]}...")
-        if top5_indices[0] == idx:
-            print("✅ KẾT QUẢ: TÌM THẤY CHÍNH XÁC!")
-        else:
-            print("❌ KẾT QUẢ: KHÔNG KHỚP TOP 1.")
+        print("✅ KẾT QUẢ: " + ("CHÍNH XÁC!" if top5_indices[0] == i else "KHÔNG KHỚP TOP 1."))
 
-def calculate_recall(sim_matrix, axis=1):
-    """
-    sim_matrix: (N, N)
-    axis=1: Image looking for text
-    axis=0: Text looking for image
-    """
-    if axis == 0:
-        sim_matrix = sim_matrix.t()
+def calculate_recall_chunked(query_embeds, gallery_embeds, device, chunk_size=2000, axis=1):
+    num_queries = query_embeds.size(0)
+    num_gallery = gallery_embeds.size(0)
     
-    batch_size = sim_matrix.size(0)
-    # Tìm index của top K giá trị lớn nhất trong mỗi hàng
-    top10_indices = torch.topk(sim_matrix, 10, dim=1).indices
-    
-    # Index thật (Ground Truth) chính là [0, 1, 2, ..., N-1] nằm trên đường chéo
-    targets = torch.arange(batch_size, device=sim_matrix.device).view(-1, 1)
-    
-    # Kiểm tra xem target có nằm trong top K không
-    r1 = (top10_indices[:, :1] == targets).any(dim=1).float().mean().item() * 100
-    r5 = (top10_indices[:, :5] == targets).any(dim=1).float().mean().item() * 100
-    r10 = (top10_indices[:, :10] == targets).any(dim=1).float().mean().item() * 100
-    
-    return r1, r5, r10
+    hits_r1, hits_r5, hits_r10 = 0, 0, 0
+    gallery_embeds_gpu = gallery_embeds.to(device).t()
+
+    for i in tqdm(range(0, num_queries, chunk_size), desc="Calculating Recall"):
+        start = i
+        end = min(i + chunk_size, num_queries)
+        
+        # Tính tương đồng cho một khối nhỏ (ví dụ 2000 dòng)
+        query_chunk = query_embeds[start:end].to(device)
+        sim_chunk = torch.matmul(query_chunk, gallery_embeds_gpu)
+        
+        # Lấy top 10 cho khối hiện tại
+        top10_indices = torch.topk(sim_chunk, 10, dim=1).indices
+        
+        # Target index chính là vị trí thực của query trong toàn bộ gallery
+        targets = torch.arange(start, end, device=device).view(-1, 1)
+        
+        hits_r1 += (top10_indices[:, :1] == targets).any(dim=1).sum().item()
+        hits_r5 += (top10_indices[:, :5] == targets).any(dim=1).sum().item()
+        hits_r10 += (top10_indices[:, :10] == targets).any(dim=1).sum().item()
+
+    return (hits_r1/num_queries)*100, (hits_r5/num_queries)*100, (hits_r10/num_queries)*100
 
 def main():
     config = load_config()

@@ -41,5 +41,6 @@ class MedicalImageTextDataset(Dataset):
             'image': image,
             'input_ids': text_inputs['input_ids'].squeeze(0),
             'attention_mask': text_inputs['attention_mask'].squeeze(0),
-            'cluster_id': cluster_id
+            'cluster_id': cluster_id,
+            'raw_report': text
         }
