@@ -51,22 +51,27 @@ def evaluate_retrieval(model, dataloader, device):
     num_samples = img_embeds.size(0)
     print(f"✅ Đã trích xuất xong {num_samples} mẫu.")
 
+    # Giải phóng bộ nhớ GPU trước khi tính Similarity
+    torch.cuda.empty_cache()
+
     print("\n--- [2] TÍNH TOÁN RECALL@K THEO PHƯƠNG PHÁP CHUNKING (TIẾT KIỆM RAM) ---")
     
-    # Image-to-Text
-    i2t_r1, i2t_r5, i2t_r10 = calculate_recall_chunked(img_embeds, txt_embeds, device, axis=1)
-    # Text-to-Image
-    t2i_r1, t2i_r5, t2i_r10 = calculate_recall_chunked(txt_embeds, img_embeds, device, axis=1)
+    # Image-to-Text (Truy vấn ảnh, lấy văn bản)
+    i2t_r1, i2t_r5, i2t_r10 = calculate_recall_chunked(img_embeds, txt_embeds, device, chunk_size=1000)
+    
+    # Text-to-Image (Truy vấn văn bản, lấy ảnh)
+    t2i_r1, t2i_r5, t2i_r10 = calculate_recall_chunked(txt_embeds, img_embeds, device, chunk_size=1000)
 
-    print("\n" + "="*50)
+    print("\n" + "="*60)
     print(f"📊 KẾT QUẢ CUỐI CÙNG (RECALL @ K)")
-    print("="*50)
-    print(f"🔹 Image-to-Text: R@1: {i2t_r1:.2f}% | R@5: {i2t_r5:.2f}% | R@10: {i2t_r10:.2f}%")
-    print(f"🔹 Text-to-Image: R@1: {t2i_r1:.2f}% | R@5: {t2i_r5:.2f}% | R@10: {t2i_r10:.2f}%")
-    print("="*50)
+    print("="*60)
+    print(f"🔹 Image-to-Text (I2T): R@1: {i2t_r1:.2f}% | R@5: {i2t_r5:.2f}% | R@10: {i2t_r10:.2f}%")
+    print(f"🔹 Text-to-Image (T2I): R@1: {t2i_r1:.2f}% | R@5: {t2i_r5:.2f}% | R@10: {t2i_r10:.2f}%")
+    print("="*60)
 
-    # In 3 mẫu demo (Tận dụng chunk đầu tiên để lấy similarity) 
+    # In 3 mẫu demo (Tận dụng CPU embeds để demo)
     print("\n👁️ VÍ DỤ TRUY VẤN DEMO (I2T):")
+    # Chỉ tính sim cho 10 mẫu đầu tiên để trình diễn
     sample_sim = torch.matmul(img_embeds[:10].to(device), txt_embeds.to(device).t())
     for i in range(3):
         top5_indices = torch.topk(sample_sim[i], 5).indices.cpu().numpy()
@@ -74,32 +79,47 @@ def evaluate_retrieval(model, dataloader, device):
         print(f"Top 1 Dự đoán: {all_reports[top5_indices[0]][:100]}...")
         print("✅ KẾT QUẢ: " + ("CHÍNH XÁC!" if top5_indices[0] == i else "KHÔNG KHỚP TOP 1."))
 
-def calculate_recall_chunked(query_embeds, gallery_embeds, device, chunk_size=2000, axis=1):
+def calculate_recall_chunked(query_embeds, gallery_embeds, device, chunk_size=1000):
+    """
+    Tính Recall@K mà không tạo toàn bộ ma trận similarity trên GPU cùng lúc.
+    query_embeds: (N, D) - CPU tensor
+    gallery_embeds: (M, D) - CPU tensor
+    """
     num_queries = query_embeds.size(0)
     num_gallery = gallery_embeds.size(0)
     
     hits_r1, hits_r5, hits_r10 = 0, 0, 0
-    gallery_embeds_gpu = gallery_embeds.to(device).t()
+    
+    # Đưa gallery lên GPU một lần (Nếu gallery quá lớn, có thể chunk nốt cả gallery)
+    gallery_embeds_gpu = gallery_embeds.to(device).t() # (D, M)
 
     for i in tqdm(range(0, num_queries, chunk_size), desc="Calculating Recall"):
         start = i
         end = min(i + chunk_size, num_queries)
         
-        # Tính tương đồng cho một khối nhỏ (ví dụ 2000 dòng)
+        # Lấy một khối query đưa lên GPU
         query_chunk = query_embeds[start:end].to(device)
+        
+        # Tính tương đồng cho khối hiện tại: (chunk_size, M)
         sim_chunk = torch.matmul(query_chunk, gallery_embeds_gpu)
         
-        # Lấy top 10 cho khối hiện tại
+        # Tìm top 10 cho mỗi query trong gallery
         top10_indices = torch.topk(sim_chunk, 10, dim=1).indices
         
-        # Target index chính là vị trí thực của query trong toàn bộ gallery
+        # Target index chính là index thực của query trong toàn bộ gallery (Giả định 1-1 matching)
         targets = torch.arange(start, end, device=device).view(-1, 1)
         
         hits_r1 += (top10_indices[:, :1] == targets).any(dim=1).sum().item()
         hits_r5 += (top10_indices[:, :5] == targets).any(dim=1).sum().item()
         hits_r10 += (top10_indices[:, :10] == targets).any(dim=1).sum().item()
+        
+        # Dọn dẹp biến tạm để tiết kiệm RAM GPU
+        del sim_chunk
+        del top10_indices
+        # Optional: torch.cuda.empty_cache() nếu cần thiết hơn nữa
 
     return (hits_r1/num_queries)*100, (hits_r5/num_queries)*100, (hits_r10/num_queries)*100
+
 
 def main():
     config = load_config()
