@@ -22,6 +22,17 @@ class MultimodalTrainer:
         self.criterion = ClusteringGuidedContrastiveLoss(
             temperature=config['model']['temperature']
         ).to(device)
+
+        # Thêm Scheduler: Giảm tốc độ học theo đồ thị hình sin (Cosine Annealing)
+        # Giúp mô hình hội tụ ổn định hơn
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, 
+            T_max=config['training']['epochs'], 
+            eta_min=1e-6
+        )
+        
+    def get_lr(self):
+        return self.optimizer.param_groups[0]['lr']
         
     def train_epoch(self, dataloader, epoch):
         self.model.train()
@@ -63,10 +74,15 @@ class MultimodalTrainer:
                     self.optimizer.zero_grad()
             
             total_loss += loss.item() * accum_steps
-            pbar.set_postfix({"Loss": f"{loss.item() * accum_steps:.4f}"})
+            pbar.set_postfix({
+                "Loss": f"{loss.item() * accum_steps:.4f}",
+                "LR": f"{self.get_lr():.2e}"
+            })
             
         avg_loss = total_loss / (max_steps if max_steps else len(dataloader))
-        print(f"✅ Hết Epoch {epoch} - Trung bình Loss: {avg_loss:.4f}")
+        # Cập nhật Scheduler vào cuối vòng lặp Epoch
+        self.scheduler.step()
+        print(f"✅ Hết Epoch {epoch} - Trung bình Loss: {avg_loss:.4f} | LR mới: {self.get_lr():.2e}")
         return avg_loss
 
     def validate(self, dataloader, epoch):

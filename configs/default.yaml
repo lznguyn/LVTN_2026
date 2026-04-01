@@ -13,12 +13,12 @@ model:
 
 training:
   batch_size: 8              # <--- Nạp 8 ảnh/lượt
-  gradient_accumulation_steps: 4 # <--- Chạy 4 lượt mới cập nhật (Tổng = 32)
-  epochs: 1                  # <--- Vẫn để 1 để test xem nó chạy ổn không
+  gradient_accumulation_steps: 16 # <--- Tổng batch thực tế = 8 * 16 = 128
+  epochs: 20                  # <--- Huấn luyện lâu hơn để hội tụ tốt
   lr: 0.0001
-  weight_decay: 0.01
-  num_workers: 2
-  max_steps_per_epoch: 500  
+  weight_decay: 0.05          # <--- Tăng nhẹ để tránh Overfitting
+  num_workers: 4
+  max_steps_per_epoch: null  # <--- Học hết toàn bộ tập dữ liệu mỗi epoch
   log_every_n_steps: 10
   checkpoint_dir: "checkpoints/"
 
