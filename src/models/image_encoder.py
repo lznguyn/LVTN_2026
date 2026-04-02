@@ -6,19 +6,33 @@ class SwinTransformerV2Encoder(nn.Module):
     def __init__(
         self,
         model_name='swinv2_base_window12to16_192to256',
-        pretrained=True
+        pretrained=True,
+        features_only=False
     ):
         super().__init__()
 
-        # num_classes=0 => bỏ head classification, lấy feature embedding
+        self.features_only = features_only
+        
+        # num_classes=0 => bỏ head classification, lấy feature embedding sau pooling
         self.model = timm.create_model(
             model_name,
             pretrained=pretrained,
-            num_classes=0
+            num_classes=0 if not features_only else None,
+            features_only=features_only
         )
-        self.feature_dim = self.model.num_features
+        
+        if features_only:
+            # Lấy thông tin chiều sâu của Feature Map cuối cùng
+            self.feature_dim = self.model.feature_info[-1]['num_chs']
+        else:
+            self.feature_dim = self.model.num_features
 
     def forward(self, x):
         # x: (B, 3, H, W)
-        features = self.model(x)
-        return features
+        if self.features_only:
+            # Trả về list các feature maps từ các stage, chọn stage cuối
+            feature_maps = self.model(x)
+            return feature_maps[-1] # Shape: (B, C, H_f, W_f)
+        else:
+            features = self.model(x)
+            return features
