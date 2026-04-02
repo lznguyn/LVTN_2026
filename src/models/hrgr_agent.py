@@ -58,9 +58,15 @@ class HRGRAgent(nn.Module):
         self.init_h = nn.Linear(self.encoder_dim, decoder_dim)
 
     def get_global_features(self, spatial_features):
-        # Flatten spatial: (B, C, H, W) -> (B, H*W, C)
-        # Global: pooling (B, C)
-        global_features = spatial_features.mean(dim=[2, 3])
+        """
+        spatial_features: (B, H, W, C) cho SwinV2 (timm features_only)
+        """
+        if spatial_features.dim() == 4:
+            # (B, H, W, C) -> mean over H, W -> (B, C)
+            global_features = spatial_features.mean(dim=[1, 2])
+        else:
+            # (B, C, H, W) -> (B, C)
+            global_features = spatial_features.mean(dim=[2, 3])
         return global_features
 
     def init_hidden_state(self, global_features):
@@ -70,18 +76,20 @@ class HRGRAgent(nn.Module):
     def forward(self, images, target_actions=None, target_words=None, max_sentences=8, max_words=20):
         """
         Forward pass hỗ trợ cả Training (MLE) và Inference.
-        - target_actions: (B, max_sentences) - Index templates hoặc 0 (Generate)
-        - target_words: (B, max_sentences, max_words) - Token ids cho các câu tự viết
         """
         batch_size = images.size(0)
         device = images.device
 
         # 1. Image features
-        spatial_features = self.image_encoder(images)
+        spatial_features = self.image_encoder(images) # (B, H, W, C)
         global_features = self.get_global_features(spatial_features)
         
         # Flatten spatial: (B, NumPixels, C)
-        spatial_features = spatial_features.permute(0, 2, 3, 1).view(batch_size, -1, self.encoder_dim)
+        # Nếu đã là (B, H, W, C), chỉ cần reshape thành (B, H*W, C)
+        if spatial_features.dim() == 4:
+             spatial_features = spatial_features.reshape(batch_size, -1, self.encoder_dim)
+        else:
+             spatial_features = spatial_features.permute(0, 2, 3, 1).reshape(batch_size, -1, self.encoder_dim)
         
         # 2. Init Sentence Decoder
         h_s = self.init_hidden_state(global_features)
@@ -132,6 +140,11 @@ class HRGRAgent(nn.Module):
             
             all_word_logits.append(torch.stack(sentence_word_logits, dim=1))
 
+        # Stack kết quả: (B, max_sentences, ...)
+        return torch.stack(all_policy_logits, dim=1), \
+               torch.stack(all_stop_logits, dim=1), \
+               torch.stack(all_word_logits, dim=1)
+
     def generate(self, image, vocab, max_sentences=6, max_words=15):
         """
         Dùng cho Inference: Nhận 1 ảnh, sinh ra báo cáo hoàn chỉnh.
@@ -144,7 +157,12 @@ class HRGRAgent(nn.Module):
             # 1. Feature extraction
             spatial_features = self.image_encoder(image)
             global_features = self.get_global_features(spatial_features)
-            spatial_features = spatial_features.permute(0, 2, 3, 1).view(batch_size, -1, self.encoder_dim)
+            
+            # Flatten spatial: (B, NumPixels, C)
+            if spatial_features.dim() == 4:
+                spatial_features = spatial_features.reshape(batch_size, -1, self.encoder_dim)
+            else:
+                spatial_features = spatial_features.permute(0, 2, 3, 1).reshape(batch_size, -1, self.encoder_dim)
             
             # 2. Init Topic state
             h_s = self.init_hidden_state(global_features)

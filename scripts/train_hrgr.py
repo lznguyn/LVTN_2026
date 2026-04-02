@@ -50,11 +50,23 @@ def train_hrgr():
     # Load Pre-trained Image Encoder Weights (nếu có)
     checkpoint_path = "checkpoints/best_model.pth"
     if os.path.exists(checkpoint_path):
-        print(f"Loading pre-trained weight from {checkpoint_path}...")
+        print(f"Loading pre-trained weights from {checkpoint_path}...")
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        # Lọc weights chỉ lấy phần image_encoder
-        encoder_weights = {k.replace('image_encoder.', ''): v for k, v in checkpoint['model_state_dict'].items() if k.startswith('image_encoder.')}
-        model.image_encoder.model.load_state_dict(encoder_weights, strict=False)
+        
+        # Kiểm tra xem checkpoint là dict chứa 'model_state_dict' hay là trực tiếp state_dict
+        state_dict = checkpoint.get('model_state_dict', checkpoint) if isinstance(checkpoint, dict) else checkpoint
+        
+        # Lọc weights chỉ lấy phần image_encoder và sửa lỗi layer naming (layers.x -> layers_x)
+        encoder_weights = {
+            k.replace('image_encoder.model.', '').replace('layers.0.', 'layers_0.').replace('layers.1.', 'layers_1.').replace('layers.2.', 'layers_2.').replace('layers.3.', 'layers_3.'): v 
+            for k, v in state_dict.items() if k.startswith('image_encoder.model.')
+        }
+        
+        if encoder_weights:
+            msg = model.image_encoder.model.load_state_dict(encoder_weights, strict=False)
+            print(f"✅ Đã nạp thành công Image Encoder từ weights có sẵn. {msg}")
+        else:
+            print("⚠️ Cảnh báo: Không tìm thấy trọng số 'image_encoder' trong checkpoint.")
     
     # 5. Trainer
     trainer = HRGRRLTrainer(model, vocab, templates, config, device=device)

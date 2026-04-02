@@ -34,8 +34,11 @@ class MedicalImageTextDataset(Dataset):
             return_tensors='pt'
         )
         
-        # Lấy nhãn thông tin cụm bệnh cho Task Negative Sampling
-        cluster_id = torch.tensor(row['cluster_id'], dtype=torch.long)
+        # Lấy nhãn thông tin cụm bệnh cho Task Negative Sampling (nếu có)
+        if 'cluster_id' in row:
+            cluster_id = torch.tensor(row['cluster_id'], dtype=torch.long)
+        else:
+            cluster_id = torch.tensor(-1, dtype=torch.long)
         
         return {
             'image': image,
