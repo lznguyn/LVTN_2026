@@ -85,11 +85,10 @@ class HRGRAgent(nn.Module):
         global_features = self.get_global_features(spatial_features)
         
         # Flatten spatial: (B, NumPixels, C)
-        # Nếu đã là (B, H, W, C), chỉ cần reshape thành (B, H*W, C)
         if spatial_features.dim() == 4:
              spatial_features = spatial_features.reshape(batch_size, -1, self.encoder_dim)
         else:
-             spatial_features = spatial_features.permute(0, 2, 3, 1).reshape(batch_size, -1, self.encoder_dim)
+             spatial_features = spatial_features.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, self.encoder_dim)
         
         # 2. Init Sentence Decoder
         h_s = self.init_hidden_state(global_features)
@@ -162,7 +161,7 @@ class HRGRAgent(nn.Module):
             if spatial_features.dim() == 4:
                 spatial_features = spatial_features.reshape(batch_size, -1, self.encoder_dim)
             else:
-                spatial_features = spatial_features.permute(0, 2, 3, 1).reshape(batch_size, -1, self.encoder_dim)
+                spatial_features = spatial_features.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, self.encoder_dim)
             
             # 2. Init Topic state
             h_s = self.init_hidden_state(global_features)

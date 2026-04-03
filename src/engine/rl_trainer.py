@@ -85,33 +85,45 @@ class HRGRRLTrainer:
     def train_epoch_mle(self, dataloader, epoch):
         self.model.train()
         total_loss = 0
+        
+        # 0. AMP Scalar cho huấn luyện FP16 tăng tốc độ
+        scaler = torch.amp.GradScaler('cuda')
+        
+        max_steps = self.config['training'].get('max_steps_per_epoch', None)
         pbar = tqdm(dataloader, desc=f"Epoch {epoch} MLE Training")
         
-        for batch in pbar:
+        for i, batch in enumerate(pbar):
+            if max_steps and i >= max_steps:
+                print(f"Reached max steps: {max_steps}. Finishing epoch early.")
+                break
+                
             images = batch['image'].to(self.device)
             reports = batch['raw_report']
             
             # 1. Prepare Targets
             t_actions, t_stops, t_words = self.prepare_batch_targets(reports)
             
-            # 2. Forward
+            # 2. Forward với chế độ AMP Autocast
             self.optimizer.zero_grad()
-            p_logits, s_logits, w_logits = self.model(images, t_actions, t_words)
+            with torch.amp.autocast('cuda'):
+                p_logits, s_logits, w_logits = self.model(images, t_actions, t_words)
+                
+                # 3. Calculate Losses
+                loss_p = self.criterion_policy(p_logits.reshape(-1, p_logits.size(-1)), t_actions.reshape(-1))
+                loss_s = self.criterion_stop(s_logits.squeeze(-1), t_stops)
+                loss_w = self.criterion_word(w_logits.reshape(-1, w_logits.size(-1)), t_words.reshape(-1))
+                
+                loss = loss_p + loss_s + loss_w
             
-            # 3. Calculate Losses
-            loss_p = self.criterion_policy(p_logits.view(-1, p_logits.size(-1)), t_actions.view(-1))
-            loss_s = self.criterion_stop(s_logits.squeeze(-1), t_stops)
-            loss_w = self.criterion_word(w_logits.view(-1, w_logits.size(-1)), t_words.view(-1))
-            
-            loss = loss_p + loss_s + loss_w
-            
-            loss.backward()
-            self.optimizer.step()
+            # 4. Backward & Step với Scaler
+            scaler.scale(loss).backward()
+            scaler.step(self.optimizer)
+            scaler.update()
             
             total_loss += loss.item()
             pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
             
-        return total_loss / len(dataloader)
+        return total_loss / (i + 1)
 
     def calculate_reward(self, gen_reports, gt_reports):
         from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction

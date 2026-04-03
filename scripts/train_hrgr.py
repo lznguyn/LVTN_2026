@@ -24,7 +24,9 @@ def train_hrgr():
     
     # 3. Data Loading
     import pandas as pd
-    train_df = pd.read_csv("data/processed/iu_xray_dataset_raw.csv") # Dùng toàn bộ cho demo
+    data_path = config['data'].get('train_csv', "data/processed/iu_xray_dataset_raw.csv")
+    print(f"📂 Loading data from: {data_path}")
+    train_df = pd.read_csv(data_path)
     
     transform = transforms.Compose([
         transforms.Resize((config['data']['image_size'], config['data']['image_size'])),
@@ -47,26 +49,38 @@ def train_hrgr():
         templates=templates
     )
     
-    # Load Pre-trained Image Encoder Weights (nếu có)
+    # 4.5 Load Pre-trained Image Encoder Weights (Robust Version)
     checkpoint_path = "checkpoints/best_model.pth"
     if os.path.exists(checkpoint_path):
-        print(f"Loading pre-trained weights from {checkpoint_path}...")
+        print(f"🔄 Đang nạp trọng số từ: {checkpoint_path}...")
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         
-        # Kiểm tra xem checkpoint là dict chứa 'model_state_dict' hay là trực tiếp state_dict
-        state_dict = checkpoint.get('model_state_dict', checkpoint) if isinstance(checkpoint, dict) else checkpoint
+        # Xử lý cả 2 trường hợp: có model_state_dict hoặc không
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+        else:
+            state_dict = checkpoint
         
-        # Lọc weights chỉ lấy phần image_encoder và sửa lỗi layer naming (layers.x -> layers_x)
-        encoder_weights = {
-            k.replace('image_encoder.model.', '').replace('layers.0.', 'layers_0.').replace('layers.1.', 'layers_1.').replace('layers.2.', 'layers_2.').replace('layers.3.', 'layers_3.'): v 
-            for k, v in state_dict.items() if k.startswith('image_encoder.model.')
-        }
+        # Lọc và sửa tên layers cho khớp với kiến trúc SwinV2 của timm 
+        encoder_weights = {}
+        for k, v in state_dict.items():
+            if 'image_encoder.model.' in k:
+                new_k = k.split('image_encoder.model.')[-1]
+                # Sửa format layers (ví dụ: layers.0. thành layers_0.)
+                for i in range(4):
+                    new_k = new_k.replace(f'layers.{i}.', f'layers_{i}.')
+                encoder_weights[new_k] = v
         
         if encoder_weights:
             msg = model.image_encoder.model.load_state_dict(encoder_weights, strict=False)
-            print(f"✅ Đã nạp thành công Image Encoder từ weights có sẵn. {msg}")
+            print(f"✅ Nạp thành công {len(encoder_weights)} layers. Status: {msg}")
         else:
-            print("⚠️ Cảnh báo: Không tìm thấy trọng số 'image_encoder' trong checkpoint.")
+            print("⚠️ Cảnh báo: Không tìm thấy trọng số tương thích với Image Encoder.")
+    
+    # 5. Đóng băng Image Encoder (Freeze) - Cần thiết cho bản Base hội tụ ổn định
+    print("❄️ Freezing Image Encoder for stable training...")
+    for param in model.image_encoder.parameters():
+        param.requires_grad = False
     
     # 5. Trainer
     trainer = HRGRRLTrainer(model, vocab, templates, config, device=device)
