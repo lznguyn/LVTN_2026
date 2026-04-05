@@ -91,8 +91,19 @@ def train_hrgr():
         loss = trainer.train_epoch_mle(dataloader, epoch)
         print(f"Epoch {epoch} Loss: {loss:.4f}")
         
-        # Save checkpiont
-        torch.save(model.state_dict(), f"checkpoints/hrgr_epoch_{epoch}.pth")
+        # Save checkpiont (Local và Backup vào Drive nếu đang chạy Colab)
+        local_path = f"checkpoints/hrgr_epoch_{epoch}.pth"
+        torch.save(model.state_dict(), local_path)
+        
+        # --- TỰ ĐỘNG BACKUP VÀO BÊN TRONG GOOGLE DRIVE ---
+        drive_dir = "/content/drive/MyDrive/HRGR_Checkpoints"
+        if os.path.exists("/content/drive/MyDrive"): # Kiểm tra xem có đang nối Drive không
+            import shutil
+            os.makedirs(drive_dir, exist_ok=True)
+            drive_path = os.path.join(drive_dir, f"hrgr_epoch_{epoch}.pth")
+            shutil.copy(local_path, drive_path)
+            print(f"✅ Đã chép an toàn Epoch {epoch} vào Google Drive: {drive_path}")
+        # ---------------------------------------------------
 
 if __name__ == "__main__":
     train_hrgr()

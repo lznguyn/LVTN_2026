@@ -93,6 +93,16 @@ def main():
             torch.save(model.state_dict(), ckpt_path)
             print(f"⭐ [CÓ CẢI THIỆN] - Đã chép file kết quả ghi đè vào: {ckpt_path}")
             
+            # --- TỰ ĐỘNG BACKUP VÀO BÊN TRONG GOOGLE DRIVE ---
+            drive_dir = "/content/drive/MyDrive/Multimodal_Checkpoints"
+            if os.path.exists("/content/drive/MyDrive"):
+                import shutil
+                os.makedirs(drive_dir, exist_ok=True)
+                drive_path = os.path.join(drive_dir, "best_model.pth")
+                shutil.copy(ckpt_path, drive_path)
+                print(f"✅ Đã backup file best_model.pth an toàn vào Google Drive: {drive_path}")
+            # ---------------------------------------------------
+            
     print("\n🎉 HOÀN TẤT QUÁ TRÌNH THỰC THI KHÓA LUẬN!")
 
 if __name__ == "__main__":
