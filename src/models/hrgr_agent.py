@@ -144,9 +144,12 @@ class HRGRAgent(nn.Module):
                torch.stack(all_stop_logits, dim=1), \
                torch.stack(all_word_logits, dim=1)
 
-    def generate(self, image, vocab, max_sentences=6, max_words=15):
+    def generate(self, image, vocab, max_sentences=6, max_words=15, beam_size=3):
         """
-        Dùng cho Inference: Nhận 1 ảnh, sinh ra báo cáo hoàn chỉnh.
+        [OVERHAUL VERSION]
+        - Fix Spatial Axes: (B, C, H, W) -> (B, H*W, C) correctly.
+        - Beam Search: Use beam search for word decoding.
+        - Repetition Penalty: Prevent picking the same template twice.
         """
         self.eval()
         device = image.device
@@ -154,58 +157,93 @@ class HRGRAgent(nn.Module):
 
         with torch.no_grad():
             # 1. Feature extraction
-            spatial_features = self.image_encoder(image)
+            spatial_features = self.image_encoder(image) # (B, C, H, W)
             global_features = self.get_global_features(spatial_features)
             
-            # Flatten spatial: (B, NumPixels, C)
+            # --- FIX: Permute before reshaping to avoid spatial scrambling ---
             if spatial_features.dim() == 4:
-                spatial_features = spatial_features.reshape(batch_size, -1, self.encoder_dim)
+                # (B, C, H, W) -> (B, H, W, C) -> (B, H*W, C)
+                spatial_features_flat = spatial_features.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, self.encoder_dim)
             else:
-                spatial_features = spatial_features.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, self.encoder_dim)
+                spatial_features_flat = spatial_features.reshape(batch_size, -1, self.encoder_dim)
             
             # 2. Init Topic state
             h_s = self.init_hidden_state(global_features)
             
             generated_sentences = []
+            used_templates = set() # Tránh chọn lại template đã dùng
             
             for i in range(max_sentences):
                 h_s = self.sentence_decoder(global_features, h_s)
                 
                 # Predict Action & Stop
-                policy_logits = self.policy_head(h_s)
+                policy_logits = self.policy_head(h_s) # (B, 1 + target_templates)
                 stop_logits = self.stop_head(h_s)
                 
+                # --- REPETITION PENALTY: Chặn chọn lại Template đã dùng ---
+                for t_idx in used_templates:
+                    policy_logits[0, t_idx + 1] -= 100.0 # Index 0 là Generate
+
                 action = policy_logits.argmax(dim=1).item()
                 stop = torch.sigmoid(stop_logits).item()
                 
-                if stop > 0.5:
+                if stop > 0.8: # Ngưỡng dừng linh hoạt hơn
                     break
                 
                 if action > 0:
-                    # Lấy từ Template Database
+                    # CASE: Retrieval (Template)
                     template_text = self.templates[action - 1]
                     generated_sentences.append(template_text)
+                    used_templates.add(action - 1)
                 else:
-                    # Tự viết câu mới (Word Decoder)
-                    h_w = h_s
-                    prev_word = torch.tensor([1], device=device) # <start>
-                    sentence_words = []
+                    # CASE: Generation (Word Decoder + Beam Search)
+                    h_w = h_s.clone()
+                    
+                    # Cấu hình Beam Search đơn giản
+                    # [score, word_list, hidden_state]
+                    beams = [(0.0, [1], h_w)] # 1 là <start>
                     
                     for t in range(max_words):
-                        embeddings = self.word_embedding(prev_word)
-                        context, _ = self.attention(spatial_features, h_w)
-                        h_w = self.word_decoder(torch.cat([embeddings, context], dim=1), h_w)
+                        new_beams = []
+                        for score, word_list, prev_h in beams:
+                            if word_list[-1] == 2: # <end>
+                                new_beams.append((score, word_list, prev_h))
+                                continue
+                                
+                            prev_word = torch.tensor([word_list[-1]], device=device)
+                            embeddings = self.word_embedding(prev_word)
+                            context, _ = self.attention(spatial_features_flat, prev_h)
+                            
+                            next_h = self.word_decoder(torch.cat([embeddings, context], dim=1), prev_h)
+                            logits = self.word_fc(next_h)
+                            log_probs = F.log_softmax(logits, dim=1)
+                            
+                            # Lấy top k từ tiếp theo
+                            topk_probs, topk_id = log_probs.topk(beam_size)
+                            
+                            for k in range(beam_size):
+                                next_score = score + topk_probs[0, k].item()
+                                next_word_list = word_list + [topk_id[0, k].item()]
+                                new_beams.append((next_score, next_word_list, next_h))
                         
-                        word_logits = self.word_fc(h_w)
-                        word_idx = word_logits.argmax(dim=1).item()
+                        # Giữ lại top k chùm tốt nhất
+                        beams = sorted(new_beams, key=lambda x: x[0], reverse=True)[:beam_size]
                         
-                        if word_idx == 2: # <end>
+                        # Nếu tất cả các chùm đều kết thúc bằng <end>, dừng sớm
+                        if all(b[1][-1] == 2 for b in beams):
                             break
-                        
-                        word = vocab.idx2word.get(word_idx, '<unk>')
-                        sentence_words.append(word)
-                        prev_word = torch.tensor([word_idx], device=device)
-                        
-                    generated_sentences.append(" ".join(sentence_words))
+                    
+                    # Chọn chùm tốt nhất (bỏ <start> ở đầu)
+                    best_words = beams[0][1][1:]
+                    # Chuyển ID thành chữ, dừng khi gặp <end>
+                    final_words = []
+                    for w_idx in best_words:
+                        if w_idx == 2: # <end>
+                            break
+                        final_words.append(vocab.idx2word.get(w_idx, '<unk>'))
+                    
+                    # Bỏ qua nếu câu rỗng hoặc toàn <unk>
+                    if len(final_words) > 0:
+                        generated_sentences.append(" ".join(final_words))
             
             return ". ".join(generated_sentences) + "."

@@ -30,12 +30,18 @@ class WordVocabulary:
         import pandas as pd
         df = pd.read_csv(csv_path)
         counter = Counter()
+        
+        # Regex thông minh tách dấu câu dính chữ: "heart." -> "heart", "."
+        regex = r'\w+|[.,;!?]' 
+        
         for report in df['report'].dropna():
-            tokens = re.findall(r'\w+', str(report).lower())
+            # Chuyển về chữ thường và tách từ
+            tokens = re.findall(regex, str(report).lower())
             counter.update(tokens)
         
         vocab = cls()
-        for word, freq in counter.items():
+        # Sắp xếp theo tần suất từ cao đến thấp để giữ lại các từ quan trọng nhất
+        for word, freq in counter.most_common():
             if freq >= min_freq:
                 vocab.add_word(word)
         return vocab
