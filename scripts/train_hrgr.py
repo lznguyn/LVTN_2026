@@ -8,6 +8,7 @@ from src.data.vocabulary import WordVocabulary
 import json
 from transformers import AutoTokenizer
 import os
+import re
 from torchvision import transforms
 
 def train_hrgr():
@@ -82,14 +83,38 @@ def train_hrgr():
     for param in model.image_encoder.parameters():
         param.requires_grad = False
     
-    # 5. Trainer
+    # 5. Khởi tạo Trainer
     trainer = HRGRRLTrainer(model, vocab, templates, config, device=device)
 
+    # 5.1 Logic Tự động Resume từ checkpoint mới nhất
+    start_epoch = 1
+    checkpoint_dir = config['training'].get('checkpoint_dir', 'checkpoints/')
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    # Tìm file checkpoint có số epoch lớn nhất: hrgr_epoch_X.pth
+    import glob
+    checkpoints = glob.glob(os.path.join(checkpoint_dir, "hrgr_epoch_*.pth"))
+    if checkpoints:
+        # Lấy số epoch từ tên file
+        epochs_found = [int(re.findall(r'epoch_(\d+)', f)[0]) for f in checkpoints]
+        if epochs_found:
+            latest_epoch = max(epochs_found)
+            latest_ckpt = os.path.join(checkpoint_dir, f"hrgr_epoch_{latest_epoch}.pth")
+            print(f"🔄 Tìm thấy checkpoint epoch {latest_epoch}. Đang nạp để chạy tiếp...")
+            model.load_state_dict(torch.load(latest_ckpt, map_location=device))
+            start_epoch = latest_epoch + 1
+            # Cập nhật scheduler tương ứng
+            for _ in range(latest_epoch):
+                trainer.scheduler.step()
+            print(f"⏩ Sẽ bắt đầu huấn luyện từ Epoch {start_epoch}")
+    
     # 6. Training Loop (MLE Phase)
-    print("Starting MLE Training...")
-    for epoch in range(1, 6): # Huấn luyện 5 epoch MLE mẫu
+    print(f"🚀 Starting MLE Training from Epoch {start_epoch} to {config['training']['epochs']}...")
+    for epoch in range(start_epoch, config['training']['epochs'] + 1):
         loss = trainer.train_epoch_mle(dataloader, epoch)
-        print(f"Epoch {epoch} Loss: {loss:.4f}")
+        # Cập nhật LR
+        trainer.scheduler.step()
+        print(f"Epoch {epoch} Loss: {loss:.4f} | LR: {trainer.optimizer.param_groups[0]['lr']:.2e}")
         
         # Save checkpiont (Local và Backup vào Drive nếu đang chạy Colab)
         local_path = f"checkpoints/hrgr_epoch_{epoch}.pth"

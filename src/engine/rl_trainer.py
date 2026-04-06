@@ -23,6 +23,16 @@ class HRGRRLTrainer:
         self.criterion_policy = nn.CrossEntropyLoss()
         self.criterion_stop = nn.BCEWithLogitsLoss()
         self.criterion_word = nn.CrossEntropyLoss(ignore_index=0) # Index 0 is <pad>
+        
+        # 0. Thêm Schedulers (Cosine Annealing)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, 
+            T_max=config['training']['epochs'], 
+            eta_min=1e-6
+        )
+        
+        # 0.1 Thêm GradScaler cho Mixed Precision (FP16)
+        self.scaler = torch.amp.GradScaler('cuda') if device == 'cuda' else None
 
     def get_targets(self, report):
         """
@@ -86,9 +96,7 @@ class HRGRRLTrainer:
         self.model.train()
         total_loss = 0
         
-        # 0. AMP Scalar cho huấn luyện FP16 tăng tốc độ
-        scaler = torch.amp.GradScaler('cuda')
-        
+        # 0. Lấy max_steps từ cấu hình
         max_steps = self.config['training'].get('max_steps_per_epoch', None)
         pbar = tqdm(dataloader, desc=f"Epoch {epoch} MLE Training")
         
@@ -116,9 +124,13 @@ class HRGRRLTrainer:
                 loss = loss_p + loss_s + loss_w
             
             # 4. Backward & Step với Scaler
-            scaler.scale(loss).backward()
-            scaler.step(self.optimizer)
-            scaler.update()
+            if self.scaler:
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                loss.backward()
+                self.optimizer.step()
             
             total_loss += loss.item()
             pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
