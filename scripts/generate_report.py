@@ -8,9 +8,9 @@ import yaml
 import sys
 import os
 
-def generate_report(image_path, model_path):
+def generate_report(image_path, old_image_path=None, model_path="checkpoints/hrgr_epoch_1.pth"):
     # 1. Load Config & Resources
-    with open("configs/default.yaml", "r") as f:
+    with open("configs/default.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
     
     with open("data/processed/templates.json", "r", encoding="utf-8") as f:
@@ -46,21 +46,34 @@ def generate_report(image_path, model_path):
     
     image = Image.open(image_path).convert('RGB')
     image_tensor = transform(image).unsqueeze(0).to(device)
+    
+    old_image_tensor = None
+    if old_image_path:
+        old_image = Image.open(old_image_path).convert('RGB')
+        old_image_tensor = transform(old_image).unsqueeze(0).to(device)
 
     # 5. Generate Report
-    print(f"\n--- Generating Report for: {os.path.basename(image_path)} ---")
-    report = model.generate(image_tensor, vocab)
-    print(f"AI REPORT: {report}")
+    print(f"\n--- Generating Report ---")
+    print(f"New Image: {os.path.basename(image_path)}")
+    if old_image_path:
+        print(f"Old Image: {os.path.basename(old_image_path)}")
+    else:
+        print(f"Old Image: (None - using new image as baseline)")
+        
+    report = model.generate(image_tensor, old_image_tensor, vocab)
+    print(f"\nAI REPORT: {report}")
     print("--------------------------------------------------\n")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python scripts/generate_report.py <image_path> [model_checkpoint]")
-        # Placeholder for demo if no args provided
-        test_img = "data/raw/sample.jpg" # Update with a real path if testing
-        if os.path.exists(test_img):
-            generate_report(test_img, "checkpoints/hrgr_epoch_1.pth")
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate medical report from one or two images.")
+    parser.add_argument("image", help="Path to the new/current image.")
+    parser.add_argument("--old", help="Path to the old/baseline image (optional).", default=None)
+    parser.add_argument("--ckpt", help="Path to the model checkpoint.", default="checkpoints/hrgr_epoch_1.pth")
+    
+    args = parser.parse_args()
+    
+    if os.path.exists(args.image):
+        generate_report(args.image, args.old, args.ckpt)
     else:
-        img_p = sys.argv[1]
-        ckpt_p = sys.argv[2] if len(sys.argv) > 2 else "checkpoints/hrgr_epoch_1.pth"
-        generate_report(img_p, ckpt_p)
+        print(f"Error: Image {args.image} not found.")

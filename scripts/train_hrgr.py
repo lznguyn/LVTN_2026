@@ -13,7 +13,7 @@ from torchvision import transforms
 
 def train_hrgr():
     # 1. Load Config
-    with open("configs/default.yaml", "r") as f:
+    with open("configs/default.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -101,7 +101,7 @@ def train_hrgr():
             latest_epoch = max(epochs_found)
             latest_ckpt = os.path.join(checkpoint_dir, f"hrgr_epoch_{latest_epoch}.pth")
             print(f"🔄 Tìm thấy checkpoint epoch {latest_epoch}. Đang nạp để chạy tiếp...")
-            model.load_state_dict(torch.load(latest_ckpt, map_location=device))
+            model.load_state_dict(torch.load(latest_ckpt, map_location=device), strict=False)
             start_epoch = latest_epoch + 1
             # Cập nhật scheduler tương ứng
             for _ in range(latest_epoch):

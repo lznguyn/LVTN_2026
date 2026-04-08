@@ -106,6 +106,7 @@ class HRGRRLTrainer:
                 break
                 
             images = batch['image'].to(self.device)
+            old_images = batch['image_old'].to(self.device)
             reports = batch['raw_report']
             
             # 1. Prepare Targets
@@ -114,7 +115,7 @@ class HRGRRLTrainer:
             # 2. Forward với chế độ AMP Autocast
             self.optimizer.zero_grad()
             with torch.amp.autocast('cuda'):
-                p_logits, s_logits, w_logits = self.model(images, t_actions, t_words)
+                p_logits, s_logits, w_logits = self.model(images, old_images, t_actions, t_words)
                 
                 # 3. Calculate Losses
                 loss_p = self.criterion_policy(p_logits.reshape(-1, p_logits.size(-1)), t_actions.reshape(-1))

@@ -54,8 +54,9 @@ class HRGRAgent(nn.Module):
         self.word_decoder = nn.GRUCell(embed_dim + self.encoder_dim, decoder_dim)
         self.word_fc = nn.Linear(decoder_dim, vocab_size)
         
-        # Khởi tạo hidden state từ Image Global Features
-        self.init_h = nn.Linear(self.encoder_dim, decoder_dim)
+        # Khởi tạo hidden state từ Image Global Features (Hỗ trợ Dual Image Fusion)
+        self.init_h = nn.Linear(self.encoder_dim * 2, decoder_dim) # Fusion of 2 images
+        self.global_fusion = nn.Linear(self.encoder_dim * 2, self.encoder_dim) # To feed into GRU
 
     def get_global_features(self, spatial_features):
         """
@@ -73,33 +74,51 @@ class HRGRAgent(nn.Module):
         h = self.init_h(global_features)
         return torch.tanh(h)
 
-    def forward(self, images, target_actions=None, target_words=None, max_sentences=8, max_words=20):
+    def forward(self, images, old_images=None, target_actions=None, target_words=None, max_sentences=8, max_words=20):
         """
         Forward pass hỗ trợ cả Training (MLE) và Inference.
+        Chấp nhận thêm old_images để thực hiện báo cáo so sánh.
         """
         batch_size = images.size(0)
         device = images.device
 
-        # 1. Image features
-        spatial_features = self.image_encoder(images) # (B, H, W, C)
-        global_features = self.get_global_features(spatial_features)
+        # Nếu không có ảnh cũ, dùng chính ảnh mới làm baseline
+        if old_images is None:
+            old_images = images
+
+        # 1. Image features (Shared Encoder)
+        spatial_new = self.image_encoder(images) # (B, H, W, C)
+        global_new = self.get_global_features(spatial_new)
         
+        spatial_old = self.image_encoder(old_images)
+        global_old = self.get_global_features(spatial_old)
+
+        # Fusion Global Features
+        global_combined = torch.cat([global_new, global_old], dim=1) # (B, 2*C)
+        global_fused = self.global_fusion(global_combined) # (B, C) - used for cell update
+        
+        # Merge Spatial Features (Concatenate samples)
         # Flatten spatial: (B, NumPixels, C)
-        if spatial_features.dim() == 4:
-             spatial_features = spatial_features.reshape(batch_size, -1, self.encoder_dim)
+        if spatial_new.dim() == 4:
+             spatial_new = spatial_new.reshape(batch_size, -1, self.encoder_dim)
+             spatial_old = spatial_old.reshape(batch_size, -1, self.encoder_dim)
         else:
-             spatial_features = spatial_features.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, self.encoder_dim)
+             spatial_new = spatial_new.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, self.encoder_dim)
+             spatial_old = spatial_old.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, self.encoder_dim)
         
-        # 2. Init Sentence Decoder
-        h_s = self.init_hidden_state(global_features)
+        # Concatenate spatial along sequence dim: (B, 2*NumPixels, C)
+        spatial_features = torch.cat([spatial_new, spatial_old], dim=1)
+        
+        # 2. Init Sentence Decoder (From fused global)
+        h_s = self.init_hidden_state(global_combined)
         
         all_policy_logits = []
         all_stop_logits = []
         all_word_logits = [] # (B, max_sentences, max_words, vocab_size)
 
         for i in range(max_sentences):
-            # Cập nhật topic vector q_i (h_s)
-            h_s = self.sentence_decoder(global_features, h_s)
+            # Cập nhật topic vector q_i (h_s) sử dụng global_fused
+            h_s = self.sentence_decoder(global_fused, h_s)
             
             # Policy & Stop Preds
             policy_logits = self.policy_head(h_s)
@@ -144,37 +163,50 @@ class HRGRAgent(nn.Module):
                torch.stack(all_stop_logits, dim=1), \
                torch.stack(all_word_logits, dim=1)
 
-    def generate(self, image, vocab, max_sentences=6, max_words=15, beam_size=3):
+    def generate(self, image, old_image=None, vocab=None, max_sentences=6, max_words=15, beam_size=3):
         """
-        [OVERHAUL VERSION]
-        - Fix Spatial Axes: (B, C, H, W) -> (B, H*W, C) correctly.
-        - Beam Search: Use beam search for word decoding.
-        - Repetition Penalty: Prevent picking the same template twice.
+        Duyệt qua 2 ảnh để tạo báo cáo so sánh.
         """
+        if vocab is None:
+            raise ValueError("Vocab must be provided for generation.")
+
         self.eval()
         device = image.device
         batch_size = image.size(0)
+        
+        if old_image is None:
+            old_image = image
 
         with torch.no_grad():
             # 1. Feature extraction
-            spatial_features = self.image_encoder(image) # (B, C, H, W)
-            global_features = self.get_global_features(spatial_features)
+            spatial_new = self.image_encoder(image) 
+            global_new = self.get_global_features(spatial_new)
             
-            # --- FIX: Permute before reshaping to avoid spatial scrambling ---
-            if spatial_features.dim() == 4:
+            spatial_old = self.image_encoder(old_image)
+            global_old = self.get_global_features(spatial_old)
+
+            global_combined = torch.cat([global_new, global_old], dim=1)
+            global_fused = self.global_fusion(global_combined)
+
+            # Flatten & Permute Spatial
+            if spatial_new.dim() == 4:
                 # (B, C, H, W) -> (B, H, W, C) -> (B, H*W, C)
-                spatial_features_flat = spatial_features.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, self.encoder_dim)
+                sn_flat = spatial_new.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, self.encoder_dim)
+                so_flat = spatial_old.permute(0, 2, 3, 1).contiguous().reshape(batch_size, -1, self.encoder_dim)
             else:
-                spatial_features_flat = spatial_features.reshape(batch_size, -1, self.encoder_dim)
+                sn_flat = spatial_new.reshape(batch_size, -1, self.encoder_dim)
+                so_flat = spatial_old.reshape(batch_size, -1, self.encoder_dim)
+            
+            spatial_features_flat = torch.cat([sn_flat, so_flat], dim=1)
             
             # 2. Init Topic state
-            h_s = self.init_hidden_state(global_features)
+            h_s = self.init_hidden_state(global_combined)
             
             generated_sentences = []
             used_templates = set() # Tránh chọn lại template đã dùng
             
             for i in range(max_sentences):
-                h_s = self.sentence_decoder(global_features, h_s)
+                h_s = self.sentence_decoder(global_fused, h_s)
                 
                 # Predict Action & Stop
                 policy_logits = self.policy_head(h_s) # (B, 1 + target_templates)
