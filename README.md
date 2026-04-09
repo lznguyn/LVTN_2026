@@ -119,6 +119,85 @@ Hệ thống được vận hành qua 3 giai đoạn chính:
     - Kiểm tra khả năng gom cụm của không gian Embedding bằng t-SNE visualization.
 
 ---
+# Cơ chế Sinh Báo cáo Y tế: HRGR Agent (Hierarchical Hybrid Generation)
+
+Tài liệu này giải thích cách mô hình **HRGR Agent** trong hệ thống tự động tạo ra một bản báo cáo y tế hoàn chỉnh từ hình ảnh X-quang, đặc biệt là cơ chế kết hợp giữa việc sử dụng các mẫu câu có sẵn và việc tự sinh văn bản mới.
+
+---
+CƠ CHẾ SINH VĂN BẢN (Sử dụng HRGR-Agent (Hybrid Retrieval-Generation Reinforced Agent). )
+
+## 1. Kiến trúc Phân cấp (Hierarchical Architecture)
+
+Thay vì sinh toàn bộ văn bản dưới dạng một chuỗi từ dài, mô hình hoạt động theo cấu trúc hai tầng:
+
+1.  **Tầng Câu (Sentence Level)**: Đóng vai trò như một người lập kế hoạch (Manager). Tại mỗi bước, nó quyết định:
+    - Chúng ta nên viết về chủ đề gì tiếp theo?
+    - Nên sử dụng một mẫu câu có sẵn (Template) hay nên tự viết tay (Generation)?
+    - Khi nào thì nên dừng lại và kết thúc báo cáo?
+2.  **Tầng Từ (Word Level)**: Đóng vai trò như một người thực thi (Worker). Nếu tầng Câu quyết định "Tự viết", tầng Từ sẽ bắt đầu sinh từng từ một cho đến khi hoàn thành một câu mô tả chi tiết.
+
+---
+
+## 2. Cơ chế Lai: Truy vấn mẫu vs. Sinh từ tự do (Hybrid Logic)
+
+Điểm đặc biệt của mô hình là khả năng chọn giữa **Retrieval** (Lấy mẫu) và **Generation** (Sinh từ).
+
+### Sơ đồ Logic:
+
+```mermaid
+graph TD
+    START[Bắt đầu tạo câu mới] --> FEAT[Trích xuất đặc trưng Ảnh]
+    FEAT --> SENT_DEC[Sentence Decoder - GRU]
+    
+    SENT_DEC --> POLICY{Policy Head chọn gì?}
+    
+    POLICY -- "Action Index 0" --> GEN[Sinh từ tự do - Word Decoder]
+    GEN --> ATT[Attention nhìn vào vùng ảnh]
+    ATT --> BEAM[Beam Search chọn từ tốt nhất]
+    BEAM --> NEXT[Tiếp tục câu tiếp theo]
+    
+    POLICY -- "Action Index 1...N" --> RET[Truy vấn Mẫu câu - Template]
+    RET --> TEMPLATE[Lấy câu mẫu tương ứng từ Database]
+    TEMPLATE --> NEXT
+    
+    SENT_DEC --> STOP{Stop Head > Ngưỡng?}
+    STOP -- "Đúng" --> END[Kết thúc Báo cáo]
+    STOP -- "Sai" --> START
+```
+
+### Tại sao lại cần cơ chế lai này?
+- **Mẫu câu (Templates)**: Dành cho các quan sát phổ biến và chuẩn mực (ví dụ: "The lungs are clear", "No pleural effusion"). Việc dùng mẫu giúp báo cáo chuyên nghiệp và ít lỗi ngữ pháp hơn.
+- **Sinh từ (Generation)**: Dành cho các tình trạng phức tạp hoặc hiếm gặp mà mẫu câu không bao quát hết. Điều này giúp mô hình linh hoạt hơn.
+
+---
+
+## 3. So sánh Đa ảnh (Dual-Image Comparison)
+
+Hệ thống hỗ trợ chế độ so sánh tiến triển bệnh bằng cách nạp vào hai phim X-quang (Ảnh hiện tại và Ảnh cũ/baseline).
+
+- **Feature Fusion**: Mô hình kết hợp đặc trưng từ cả hai ảnh thông qua một lớp Fusion Layer.
+- **Comparative Reasoning**: Nhờ việc nhìn thấy cả hai thời điểm, mô hình có thể tạo ra các câu như: *"So với phim cũ ngày..., tình trạng viêm phổi đã có sự thuyên giảm"* hoặc *"Bóng tim vẫn giữ nguyên kích thước so với trước"*.
+
+---
+
+## 4. Các thành phần kỹ thuật chính
+
+- **Swin Transformer V2**: "Mắt" của mô hình, giúp nhận diện các bất thường cục bộ trên ảnh.
+- **Bahdanau Attention**: Giúp mô hình tập trung vào vùng ảnh cụ thể khi đang viết một từ cụ thể (ví dụ: nhìn vào vùng phổi khi viết chữ "lungs").
+- **Beam Search**: Thuật toán tìm kiếm giúp mô hình không chọn từ một cách mù quáng, mà cân nhắc nhiều phương án để tìm ra câu văn có xác suất cao nhất và trôi chảy nhất.
+- **Stop Control**: Một nhánh thần kinh riêng biệt để học cách biết khi nào thông tin đã đủ và nên kết thúc báo cáo, tránh việc lặp đi lặp lại vô nghĩa.
+
+---
+
+## 5. Quy trình thực thi (Inference)
+
+Khi bạn chạy script `scripts/generate_report.py`, quy trình diễn ra như sau:
+1.  Ảnh được chuẩn hóa và đưa qua SwinV2 để lấy vector đặc trưng.
+2.  Sentence Decoder bắt đầu vòng lặp tạo câu.
+3.  Nếu chọn Template: Lấy text từ `templates.json`.
+4.  Nếu tự sinh: Word Decoder chạy Beam Search kết hợp với cơ chế Attention.
+5.  Ghép các câu lại bằng dấu chấm để tạo thành báo cáo hoàn chỉnh.
+
 
 ## 6. Kết luận
 
