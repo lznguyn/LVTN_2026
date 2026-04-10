@@ -4,28 +4,48 @@ import requests
 import pandas as pd
 import xml.etree.ElementTree as ET
 from tqdm import tqdm
+import time
 
-def download_file(url, filepath):
-    """Tải file có hiển thị Thanh tiến trình (Progress bar)."""
+def download_file(url, filepath, max_retries=5):
+    """Tải file có hiển thị Thanh tiến trình và cơ chế Retry."""
     if os.path.exists(filepath):
         print(f"File {filepath} đã tồn tại, bỏ qua bước tải mới.")
         return
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
     print(f"Bắt đầu tải từ: {url}")
     
-    # Sử dụng requests để tránh lỗi SSL Handshake của urllib
-    response = requests.get(url, stream=True)
-    response.raise_for_status()
-    total_size = int(response.headers.get('content-length', 0))
-    
-    with open(filepath, 'wb') as file, tqdm(
-        desc=filepath.split('\\')[-1],
-        total=total_size,
-        unit='B',
-        unit_scale=True,
-    ) as bar:
-        for data in response.iter_content(chunk_size=1024):
-            size = file.write(data)
-            bar.update(size)
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, stream=True, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            
+            with open(filepath, 'wb') as file, tqdm(
+                desc=os.path.basename(filepath),
+                total=total_size,
+                unit='B',
+                unit_scale=True,
+            ) as bar:
+                for data in response.iter_content(chunk_size=16384): # Tăng chunk_size để tải nhanh hơn
+                    size = file.write(data)
+                    bar.update(size)
+            print(f"Tải thành công: {filepath}")
+            return
+            
+        except (requests.exceptions.RequestException, Exception) as e:
+            print(f"\n⚠️ Lần thử {attempt + 1}/{max_retries} thất bại: {str(e)}")
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 5
+                print(f"Đang thử lại sau {wait_time} giây...")
+                time.sleep(wait_time)
+            else:
+                print("❌ Đã hết số lần thử lại. Vui lòng kiểm tra kết nối internet hoặc Server.")
+                raise e
 
 def extract_tgz(filepath, extract_dir):
     """Giải nén file nén .tgz Linux"""

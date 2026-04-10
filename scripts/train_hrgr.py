@@ -111,6 +111,12 @@ def train_hrgr():
     # 6. Training Loop (MLE Phase)
     print(f"🚀 Starting MLE Training from Epoch {start_epoch} to {config['training']['epochs']}...")
     for epoch in range(start_epoch, config['training']['epochs'] + 1):
+        # TỰ ĐỘNG UNFREEZE SAU EPOCH 5 ĐỂ TỐI ƯU R@1
+        if epoch == 6:
+            trainer.unfreeze_encoder(encoder_lr=2e-6)
+        elif start_epoch > 5 and epoch == start_epoch: # Nếu resume từ epoch 6 trở đi
+            trainer.unfreeze_encoder(encoder_lr=2e-6)
+
         loss = trainer.train_epoch_mle(dataloader, epoch)
         # Cập nhật LR
         trainer.scheduler.step()

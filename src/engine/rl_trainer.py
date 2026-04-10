@@ -20,7 +20,11 @@ class HRGRRLTrainer:
             weight_decay=float(config['training']['weight_decay'])
         )
         
-        self.criterion_policy = nn.CrossEntropyLoss()
+        # 0. Tính toán trọng số Class Weights để phá vỡ con số 62.11%
+        self.weights = self._calculate_class_weights().to(device)
+        print(f"⚖️ Applied Class Weights for Policy: {self.weights[:5].tolist()}...")
+
+        self.criterion_policy = nn.CrossEntropyLoss(weight=self.weights)
         self.criterion_stop = nn.BCEWithLogitsLoss()
         self.criterion_word = nn.CrossEntropyLoss(ignore_index=0) # Index 0 is <pad>
         
@@ -33,6 +37,72 @@ class HRGRRLTrainer:
         
         # 0.1 Thêm GradScaler cho Mixed Precision (FP16)
         self.scaler = torch.amp.GradScaler('cuda') if device == 'cuda' else None
+
+    def unfreeze_encoder(self, encoder_lr=2e-6):
+        """
+        Mở khóa Image Encoder để bắt đầu Fine-tuning sâu hơn.
+        Sử dụng LR nhỏ hơn cho Encoder để tránh làm hỏng trọng số đã pre-trained.
+        """
+        print(f"🔥 UNFREEZING Image Encoder with LR: {encoder_lr}")
+        for param in self.model.image_encoder.parameters():
+            param.requires_grad = True
+            
+        # Cập nhật Optimizer để bao gồm cả tham số encoder với LR khác nhau
+        self.optimizer = optim.AdamW([
+            {'params': self.model.image_encoder.parameters(), 'lr': encoder_lr},
+            {'params': [p for n, p in self.model.named_parameters() if 'image_encoder' not in n], 'lr': float(self.config['training']['lr'])}
+        ], weight_decay=float(self.config['training']['weight_decay']))
+        
+        # Reset scheduler để tương thích với optimizer mới
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, 
+            T_max=self.config['training']['epochs'], 
+            eta_min=1e-6
+        )
+
+    def _calculate_class_weights(self):
+        """
+        Tính toán trọng số nghịch đảo dựa trên tần suất của các Action trong tập Train.
+        Ép mô hình phải học các Template thay vì chỉ đoán 'Generate' (62%).
+        """
+        import pandas as pd
+        from collections import Counter
+        
+        train_csv = self.config['data'].get('train_csv', "data/splits/train.csv")
+        if not os.path.exists(train_csv):
+            return torch.ones(len(self.templates) + 1)
+            
+        df = pd.read_csv(train_csv)
+        all_actions = []
+        for report in df['report'].dropna():
+            # Sử dụng logic tách câu tương tự get_targets
+            sentences = re.split(r'[.;?!\n]', str(report))
+            for s in sentences:
+                s = s.strip()
+                if not s: continue
+                
+                action = 0
+                for idx, t in enumerate(self.templates):
+                    if s.lower() == t.lower():
+                        action = idx + 1
+                        break
+                all_actions.append(action)
+                break # Chỉ tính action của câu đầu tiên để tối ưu R@1
+        
+        counts = Counter(all_actions)
+        num_classes = len(self.templates) + 1
+        weights = torch.ones(num_classes)
+        
+        total = sum(counts.values())
+        for i in range(num_classes):
+            count = counts.get(i, 1) # Tránh chia cho 0
+            # Công thức: weight = Total / (n_classes * count)
+            # Dùng căn bậc 2 hoặc log để trọng số không quá cực đoan
+            weights[i] = (total / (count)) ** 0.5 
+            
+        # Chuẩn hóa để trọng số trung bình = 1
+        weights = weights / weights.mean()
+        return weights
 
     def get_targets(self, report):
         """

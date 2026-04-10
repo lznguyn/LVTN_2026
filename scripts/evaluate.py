@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -7,11 +8,16 @@ from torchvision import transforms
 from transformers import AutoTokenizer
 import os
 import sys
+import argparse
+import glob
+import json
+import re
 
 # Thiết lập đường dẫn hệ thống để gọi 'src'
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.models.multimodal import MultimodalModel
+from src.models.hrgr_agent import HRGRAgent
 from src.data.dataset import MedicalImageTextDataset
 
 def load_config(config_path="configs/default.yaml"):
@@ -26,130 +32,182 @@ def get_transforms(image_size):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
+def fix_state_dict(state_dict):
+    """Sửa lỗi mapping tên giữa các bản timm (layers.0 vs layers_0)"""
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        new_k = k.replace("layers_", "layers.")
+        new_state_dict[new_k] = v
+    return new_state_dict
+
+def get_ground_truth_action(report, templates):
+    """
+    Tìm Action chuẩn (0: Generate, 1..N: Template) cho câu đầu tiên của báo cáo.
+    Dùng logic tương tự HRGRRLTrainer.
+    """
+    sentences = re.split(r'[.;?!\n]', str(report))
+    # Lấy câu đầu tiên có nội dung
+    first_sentence = ""
+    for s in sentences:
+        s = s.strip()
+        if s:
+            first_sentence = s
+            break
+    
+    if not first_sentence:
+        return 0
+        
+    for idx, t in enumerate(templates):
+        if first_sentence.lower() == t.lower():
+            return idx + 1 # Action index
+    return 0 # Generate
+
 @torch.no_grad()
 def evaluate_retrieval(model, dataloader, device):
+    """Đánh giá R@K cho MultimodalModel (Stage 1)"""
     model.eval()
     all_img_embeds = []
     all_txt_embeds = []
-    all_reports = []
 
-    print("--- [1] TRÍCH XUẤT ĐẶC TRƯNG TẬP VALIDATION ---")
-    for batch in tqdm(dataloader, desc="Extracting Embeddings"):
+    for batch in tqdm(dataloader, desc="Retrieval Embeddings", leave=False):
         images = batch['image'].to(device)
         input_ids = batch['input_ids'].to(device)
         attention_mask = batch['attention_mask'].to(device)
-        
-        # Chỉ lấy đặc trưng (embedding)
         img_embeds, txt_embeds = model(images, input_ids, attention_mask)
-        
         all_img_embeds.append(img_embeds.cpu())
         all_txt_embeds.append(txt_embeds.cpu())
-        all_reports.extend(batch['raw_report'])
 
     img_embeds = torch.cat(all_img_embeds, dim=0)
     txt_embeds = torch.cat(all_txt_embeds, dim=0)
-    num_samples = img_embeds.size(0)
-    print(f"✅ Đã trích xuất xong {num_samples} mẫu.")
-
-    # Giải phóng bộ nhớ GPU trước khi tính Similarity
-    torch.cuda.empty_cache()
-
-    print("\n--- [2] TÍNH TOÁN RECALL@K THEO PHƯƠNG PHÁP CHUNKING (TIẾT KIỆM RAM) ---")
     
-    # Image-to-Text (Truy vấn ảnh, lấy văn bản)
-    i2t_r1, i2t_r5, i2t_r10 = calculate_recall_chunked(img_embeds, txt_embeds, device, chunk_size=1000)
+    i2t = calculate_recall_chunked(img_embeds, txt_embeds, device)
+    t2i = calculate_recall_chunked(txt_embeds, img_embeds, device)
+    return i2t, t2i
+
+@torch.no_grad()
+def evaluate_agent_accuracy(model, dataloader, device, templates):
+    """Đánh giá chính xác Action chọn Template của Agent và độ đa dạng dự đoán"""
+    model.eval()
+    total_samples = 0
+    correct_actions = 0
     
-    # Text-to-Image (Truy vấn văn bản, lấy ảnh)
-    t2i_r1, t2i_r5, t2i_r10 = calculate_recall_chunked(txt_embeds, img_embeds, device, chunk_size=1000)
+    # Theo dõi xem model dự đoán ra bao nhiêu loại template khác nhau
+    pred_actions_all = []
+    
+    for batch in tqdm(dataloader, desc="Agent Accuracy", leave=False):
+        images = batch['image'].to(device)
+        reports = batch['raw_report']
+        
+        # Forward lấy prediction (chỉ lấy câu đầu tiên)
+        policy_logits, _, _ = model(images)
+        preds = policy_logits[:, 0, :].argmax(dim=-1) # (B,)
+        pred_actions_all.extend(preds.cpu().tolist())
+        
+        # Tính Ground Truth Action cho từng mẫu trong batch
+        targets = []
+        for r in reports:
+            targets.append(get_ground_truth_action(r, templates))
+        targets = torch.tensor(targets, device=device)
+        
+        correct_actions += (preds == targets).sum().item()
+        total_samples += images.size(0)
 
-    print("\n" + "="*60)
-    print(f"📊 KẾT QUẢ CUỐI CÙNG (RECALL @ K)")
-    print("="*60)
-    print(f"🔹 Image-to-Text (I2T): R@1: {i2t_r1:.2f}% | R@5: {i2t_r5:.2f}% | R@10: {i2t_r10:.2f}%")
-    print(f"🔹 Text-to-Image (T2I): R@1: {t2i_r1:.2f}% | R@5: {t2i_r5:.2f}% | R@10: {t2i_r10:.2f}%")
-    print("="*60)
-
-    # In 3 mẫu demo (Tận dụng CPU embeds để demo)
-    print("\n👁️ VÍ DỤ TRUY VẤN DEMO (I2T):")
-    # Chỉ tính sim cho 10 mẫu đầu tiên để trình diễn
-    sample_sim = torch.matmul(img_embeds[:10].to(device), txt_embeds.to(device).t())
-    for i in range(3):
-        top5_indices = torch.topk(sample_sim[i], 5).indices.cpu().numpy()
-        print(f"\n[Mẫu {i}] Văn bản gốc: {all_reports[i][:100]}...")
-        print(f"Top 1 Dự đoán: {all_reports[top5_indices[0]][:100]}...")
-        print("✅ KẾT QUẢ: " + ("CHÍNH XÁC!" if top5_indices[0] == i else "KHÔNG KHỚP TOP 1."))
+    acc = (correct_actions / total_samples) * 100 if total_samples > 0 else 0
+    
+    # Tính độ đa dạng (Diversity): Số lượng Action khác nhau được dự đoán
+    unique_preds = len(set(pred_actions_all))
+    
+    return (acc, unique_preds, 0), (acc, unique_preds, 0)
 
 def calculate_recall_chunked(query_embeds, gallery_embeds, device, chunk_size=1000):
-    """
-    Tính Recall@K mà không tạo toàn bộ ma trận similarity trên GPU cùng lúc.
-    query_embeds: (N, D) - CPU tensor
-    gallery_embeds: (M, D) - CPU tensor
-    """
     num_queries = query_embeds.size(0)
-    num_gallery = gallery_embeds.size(0)
-    
     hits_r1, hits_r5, hits_r10 = 0, 0, 0
-    
-    # Đưa gallery lên GPU một lần (Nếu gallery quá lớn, có thể chunk nốt cả gallery)
-    gallery_embeds_gpu = gallery_embeds.to(device).t() # (D, M)
+    gallery_embeds_gpu = gallery_embeds.to(device).t() 
 
-    for i in tqdm(range(0, num_queries, chunk_size), desc="Calculating Recall"):
+    for i in range(0, num_queries, chunk_size):
         start = i
         end = min(i + chunk_size, num_queries)
-        
-        # Lấy một khối query đưa lên GPU
         query_chunk = query_embeds[start:end].to(device)
-        
-        # Tính tương đồng cho khối hiện tại: (chunk_size, M)
         sim_chunk = torch.matmul(query_chunk, gallery_embeds_gpu)
-        
-        # Tìm top 10 cho mỗi query trong gallery
         top10_indices = torch.topk(sim_chunk, 10, dim=1).indices
-        
-        # Target index chính là index thực của query trong toàn bộ gallery (Giả định 1-1 matching)
         targets = torch.arange(start, end, device=device).view(-1, 1)
-        
         hits_r1 += (top10_indices[:, :1] == targets).any(dim=1).sum().item()
         hits_r5 += (top10_indices[:, :5] == targets).any(dim=1).sum().item()
         hits_r10 += (top10_indices[:, :10] == targets).any(dim=1).sum().item()
         
-        # Dọn dẹp biến tạm để tiết kiệm RAM GPU
-        del sim_chunk
-        del top10_indices
-        # Optional: torch.cuda.empty_cache() nếu cần thiết hơn nữa
-
     return (hits_r1/num_queries)*100, (hits_r5/num_queries)*100, (hits_r10/num_queries)*100
 
-
 def main():
-    config = load_config()
+    parser = argparse.ArgumentParser(description='Smart Evaluate Retrieval & Agent')
+    parser.add_argument('--checkpoint', type=str)
+    parser.add_argument('--config', type=str, default='configs/default.yaml')
+    parser.add_argument('--output', type=str, default='data/evaluation_summary.csv')
+    args = parser.parse_args()
+
+    config = load_config(args.config)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    # 1. Nạp mô hình
-    print(f"--- ĐANG NẠP MÔ HÌNH TỪ CHECKPOINT: {config['training']['checkpoint_dir']} ---")
-    model = MultimodalModel(
-        image_encoder_name=config['model']['image_encoder'],
-        text_model_name=config['model']['text_encoder'],
-        embed_dim=config['model']['embed_dim']
-    ).to(device)
-    
-    ckpt_path = os.path.join(config['training']['checkpoint_dir'], "best_model.pth")
-    if not os.path.exists(ckpt_path):
-        print(f"❌ Lỗi: Không tìm thấy file {ckpt_path}. Bạn đã chạy Train chưa?")
-        return
-        
-    model.load_state_dict(torch.load(ckpt_path, map_location=device))
-    
-    # 2. Chuẩn bị dữ liệu
+    # Resources
     tokenizer = AutoTokenizer.from_pretrained(config['model']['text_encoder'])
     image_transform = get_transforms(config['data']['image_size'])
-    
     val_df = pd.read_csv(config['data']['val_csv'])
-    # Chế độ evaluate: Không shuffle, batch size nên lớn hơn để nhanh
-    val_dataset = MedicalImageTextDataset(val_df, image_transform, tokenizer, config['data']['max_text_length'])
-    val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'] * 2, shuffle=False)
-    
-    evaluate_retrieval(model, val_loader, device)
+    val_loader = DataLoader(MedicalImageTextDataset(val_df, image_transform, tokenizer), batch_size=16, shuffle=False)
+
+    with open("data/processed/templates.json", "r", encoding="utf8") as f:
+        templates = json.load(f)
+    with open("data/processed/vocab.json", "r", encoding="utf8") as f:
+        vocab_data = json.load(f)
+    vocab_size = len(vocab_data['word2idx'])
+
+    ckpt_input = args.checkpoint if args.checkpoint else config['training']['checkpoint_dir']
+    ckpt_files = sorted(glob.glob(os.path.join(ckpt_input, "*.pth"))) if os.path.isdir(ckpt_input) else [ckpt_input]
+
+    results = []
+    model_retrieval = None
+    model_agent = None
+
+    print(f"\n🚀 Đang đánh giá {len(ckpt_files)} file checkpoints...")
+
+    for ckpt_path in ckpt_files:
+        filename = os.path.basename(ckpt_path)
+        print(f"\n➔ Đang xử lý: {filename}")
+        
+        try:
+            state_dict = torch.load(ckpt_path, map_location=device)
+            if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
+                state_dict = state_dict['model_state_dict']
+            state_dict = fix_state_dict(state_dict)
+
+            is_agent = any('sentence_decoder' in k for k in state_dict.keys())
+            
+            if is_agent:
+                if model_agent is None:
+                    model_agent = HRGRAgent(config['model']['image_encoder'], vocab_size, templates).to(device)
+                model_agent.load_state_dict(state_dict, strict=False)
+                i2t, t2i = evaluate_agent_accuracy(model_agent, val_loader, device, templates)
+                type_str = "Agent (Acc)"
+            else:
+                if model_retrieval is None:
+                    model_retrieval = MultimodalModel(config['model']['image_encoder'], config['model']['text_encoder']).to(device)
+                model_retrieval.load_state_dict(state_dict, strict=True)
+                i2t, t2i = evaluate_retrieval(model_retrieval, val_loader, device)
+                type_str = "Retrieval"
+
+            results.append({
+                'checkpoint': filename, 'type': type_str,
+                'i2t_r1': i2t[0], 'diversity': i2t[1] 
+            })
+            print(f"✅ {type_str} - R@1/Acc: {i2t[0]:.2f}% | Diversity (Unique Actions): {i2t[1]}")
+            
+        except Exception as e:
+            print(f"⚠️ Lỗi: {str(e)}")
+
+    if results:
+        df = pd.DataFrame(results)
+        df.to_csv(args.output, index=False)
+        print("\n" + "="*50)
+        print(df.to_string(index=False))
+        print("="*50)
 
 if __name__ == "__main__":
     main()
