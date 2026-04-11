@@ -32,11 +32,21 @@ def get_transforms(image_size):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-def fix_state_dict(state_dict):
-    """Sửa lỗi mapping tên giữa các bản timm (layers.0 vs layers_0)"""
+def fix_state_dict(state_dict, model_keys):
+    """
+    Sửa lỗi mapping tên giữa các bản timm (layers.0 vs layers_0).
+    Tự động nhận diện format mà model hiện tại đang yêu cầu dựa trên model_keys.
+    """
+    has_layers_dot = any("layers." in k for k in model_keys)
+    has_layers_underscore = any("layers_" in k for k in model_keys)
+    
     new_state_dict = {}
     for k, v in state_dict.items():
-        new_k = k.replace("layers_", "layers.")
+        new_k = k
+        if has_layers_dot and "layers_" in k:
+            new_k = k.replace("layers_", "layers.")
+        elif has_layers_underscore and "layers." in k:
+            new_k = k.replace("layers.", "layers_")
         new_state_dict[new_k] = v
     return new_state_dict
 
@@ -151,6 +161,21 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(config['model']['text_encoder'])
     image_transform = get_transforms(config['data']['image_size'])
     val_df = pd.read_csv(config['data']['val_csv'])
+    
+    # --- VÁ LỖI ĐƯỜNG DẪN WINDOWS TUYỆT ĐỐI ---
+    def patch_path(p):
+        if not isinstance(p, str): return p
+        p = p.replace('\\', '/')
+        if 'data/raw/images/' in p:
+            return 'data/raw/images/' + p.split('data/raw/images/')[-1]
+        return p
+    
+    print("🛠️  Đang sửa lỗi đường dẫn Windows -> Linux...")
+    val_df['image_path'] = val_df['image_path'].apply(patch_path)
+    if 'old_image_path' in val_df.columns:
+        val_df['old_image_path'] = val_df['old_image_path'].apply(patch_path)
+    # ------------------------------------------
+
     val_loader = DataLoader(MedicalImageTextDataset(val_df, image_transform, tokenizer), batch_size=16, shuffle=False)
 
     with open("data/processed/templates.json", "r", encoding="utf8") as f:
@@ -176,28 +201,49 @@ def main():
             state_dict = torch.load(ckpt_path, map_location=device)
             if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
                 state_dict = state_dict['model_state_dict']
-            state_dict = fix_state_dict(state_dict)
-
+            
             is_agent = any('sentence_decoder' in k for k in state_dict.keys())
             
             if is_agent:
                 if model_agent is None:
                     model_agent = HRGRAgent(config['model']['image_encoder'], vocab_size, templates).to(device)
-                model_agent.load_state_dict(state_dict, strict=False)
+                
+                # Fix state dict dựa trên keys của model hiện tại
+                state_dict = fix_state_dict(state_dict, model_agent.state_dict().keys())
+                msg = model_agent.load_state_dict(state_dict, strict=False)
+                
+                print(f"   📊 Load status: {len(msg.missing_keys)} missing, {len(msg.unexpected_keys)} unexpected keys.")
+                if len(msg.missing_keys) > 100:
+                    print("   ⚠️  Cảnh báo: Có quá nhiều keys bị thiếu, khả năng cao là nạp model thất bại!")
+                
                 i2t, t2i = evaluate_agent_accuracy(model_agent, val_loader, device, templates)
                 type_str = "Agent (Acc)"
             else:
                 if model_retrieval is None:
                     model_retrieval = MultimodalModel(config['model']['image_encoder'], config['model']['text_encoder']).to(device)
+                
+                state_dict = fix_state_dict(state_dict, model_retrieval.state_dict().keys())
                 model_retrieval.load_state_dict(state_dict, strict=True)
                 i2t, t2i = evaluate_retrieval(model_retrieval, val_loader, device)
                 type_str = "Retrieval"
 
-            results.append({
-                'checkpoint': filename, 'type': type_str,
-                'i2t_r1': i2t[0], 'diversity': i2t[1] 
-            })
-            print(f"✅ {type_str} - R@1/Acc: {i2t[0]:.2f}% | Diversity (Unique Actions): {i2t[1]}")
+            # Lưu kết quả linh hoạt theo loại model
+            res_entry = {
+                'checkpoint': filename, 
+                'type': type_str,
+            }
+            
+            if is_agent:
+                res_entry['R@1 (Acc)'] = f"{i2t[0]:.2f}%"
+                res_entry['Diversity'] = f"{i2t[1]}"
+                res_entry['R@5'] = "-"
+            else:
+                res_entry['R@1 (Acc)'] = f"{i2t[0]:.2f}%"
+                res_entry['Diversity'] = "-"
+                res_entry['R@5'] = f"{i2t[1]:.2f}%"
+                
+            results.append(res_entry)
+            print(f"✅ {type_str} - Main Metric: {i2t[0]:.2f}%")
             
         except Exception as e:
             print(f"⚠️ Lỗi: {str(e)}")
