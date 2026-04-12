@@ -74,24 +74,32 @@ def get_ground_truth_action(report, templates):
 
 @torch.no_grad()
 def evaluate_retrieval(model, dataloader, device):
-    """Đánh giá R@K cho MultimodalModel (Stage 1)"""
+    """Đánh giá R@K cho MultimodalModel (Stage 1) - Hỗ trợ Semantic Cluster Match"""
     model.eval()
     all_img_embeds = []
     all_txt_embeds = []
+    all_clusters = []
 
     for batch in tqdm(dataloader, desc="Retrieval Embeddings", leave=False):
         images = batch['image'].to(device)
         input_ids = batch['input_ids'].to(device)
         attention_mask = batch['attention_mask'].to(device)
         img_embeds, txt_embeds = model(images, input_ids, attention_mask)
+        
         all_img_embeds.append(img_embeds.cpu())
         all_txt_embeds.append(txt_embeds.cpu())
+        
+        if 'cluster_id' in batch:
+            all_clusters.append(batch['cluster_id'].cpu())
 
     img_embeds = torch.cat(all_img_embeds, dim=0)
     txt_embeds = torch.cat(all_txt_embeds, dim=0)
     
-    i2t = calculate_recall_chunked(img_embeds, txt_embeds, device)
-    t2i = calculate_recall_chunked(txt_embeds, img_embeds, device)
+    # Gộp tất cả các cluster của dataset lại
+    clusters = torch.cat(all_clusters, dim=0) if all_clusters else None
+    
+    i2t = calculate_recall_chunked(img_embeds, txt_embeds, device, clusters)
+    t2i = calculate_recall_chunked(txt_embeds, img_embeds, device, clusters)
     return i2t, t2i
 
 @torch.no_grad()
@@ -129,10 +137,13 @@ def evaluate_agent_accuracy(model, dataloader, device, templates):
     
     return (acc, unique_preds, 0), (acc, unique_preds, 0)
 
-def calculate_recall_chunked(query_embeds, gallery_embeds, device, chunk_size=1000):
+def calculate_recall_chunked(query_embeds, gallery_embeds, device, clusters=None, chunk_size=1000):
     num_queries = query_embeds.size(0)
     hits_r1, hits_r5, hits_r10 = 0, 0, 0
     gallery_embeds_gpu = gallery_embeds.to(device).t() 
+    
+    if clusters is not None:
+        clusters = clusters.to(device)
 
     for i in range(0, num_queries, chunk_size):
         start = i
@@ -141,9 +152,28 @@ def calculate_recall_chunked(query_embeds, gallery_embeds, device, chunk_size=10
         sim_chunk = torch.matmul(query_chunk, gallery_embeds_gpu)
         top10_indices = torch.topk(sim_chunk, 10, dim=1).indices
         targets = torch.arange(start, end, device=device).view(-1, 1)
-        hits_r1 += (top10_indices[:, :1] == targets).any(dim=1).sum().item()
-        hits_r5 += (top10_indices[:, :5] == targets).any(dim=1).sum().item()
-        hits_r10 += (top10_indices[:, :10] == targets).any(dim=1).sum().item()
+        
+        if clusters is not None:
+            # Lấy danh sách ID cụm của nhóm query và nhóm bị truy xuất
+            query_clusters = clusters[start:end].unsqueeze(1)
+            retrieved_clusters = clusters[top10_indices]
+            
+            # Model đoán TRÚNG nếu Index chỉ đich danh chính xác bệnh nhân đó
+            matches_exact = (top10_indices == targets)
+            # Hoặc đoán TRÚNG nếu bệnh nhân được lấy ra nằm chung 1 cụm nhóm bệnh
+            is_valid_cluster = (query_clusters != -1) # Bỏ qua các nhãn lỗi
+            matches_cluster = (retrieved_clusters == query_clusters) & is_valid_cluster
+            
+            # Kết hợp cả Cụm (Semantic Match) và Khớp index (Exact Match)
+            matches = matches_exact | matches_cluster
+            
+            hits_r1 += matches[:, :1].any(dim=1).sum().item()
+            hits_r5 += matches[:, :5].any(dim=1).sum().item()
+            hits_r10 += matches[:, :10].any(dim=1).sum().item()
+        else:
+            hits_r1 += (top10_indices[:, :1] == targets).any(dim=1).sum().item()
+            hits_r5 += (top10_indices[:, :5] == targets).any(dim=1).sum().item()
+            hits_r10 += (top10_indices[:, :10] == targets).any(dim=1).sum().item()
         
     return (hits_r1/num_queries)*100, (hits_r5/num_queries)*100, (hits_r10/num_queries)*100
 

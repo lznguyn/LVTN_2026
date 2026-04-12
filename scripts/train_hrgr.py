@@ -8,8 +8,12 @@ from src.data.vocabulary import WordVocabulary
 import json
 from transformers import AutoTokenizer
 import os
+import sys
 import re
 from torchvision import transforms
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from scripts.evaluate import evaluate_agent_accuracy
 
 def train_hrgr():
     # 1. Load Config
@@ -36,12 +40,33 @@ def train_hrgr():
     ])
     
     # Ở đây chúng ta cần dataset trả về raw_report
+    tokenizer = AutoTokenizer.from_pretrained(config['model']['text_encoder'])
     dataset = MedicalImageTextDataset(
         train_df, 
         image_transform=transform, 
-        text_tokenizer=AutoTokenizer.from_pretrained(config['model']['text_encoder'])
+        text_tokenizer=tokenizer
     )
     dataloader = DataLoader(dataset, batch_size=config['training']['batch_size'], shuffle=True)
+
+    # Nạp tập Validation
+    val_csv_path = config['data'].get('val_csv', "data/splits/val.csv")
+    if os.path.exists(val_csv_path):
+        val_df = pd.read_csv(val_csv_path)
+        # Vá lỗi đường dẫn
+        def patch_path(p):
+            if not isinstance(p, str): return p
+            p = p.replace('\\', '/')
+            if 'data/raw/images/' in p: return 'data/raw/images/' + p.split('data/raw/images/')[-1]
+            return p
+        val_df['image_path'] = val_df['image_path'].apply(patch_path)
+        if 'old_image_path' in val_df.columns:
+            val_df['old_image_path'] = val_df['old_image_path'].apply(patch_path)
+            
+        val_dataset = MedicalImageTextDataset(val_df, image_transform=transform, text_tokenizer=tokenizer)
+        val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+    else:
+        val_loader = None
+        print("⚠️ Không tìm thấy tập validation")
 
     # 4. Model Initialization
     model = HRGRAgent(
@@ -110,6 +135,15 @@ def train_hrgr():
         # Cập nhật LR
         trainer.scheduler.step()
         print(f"Epoch {epoch} Loss: {loss:.4f} | LR: {trainer.optimizer.param_groups[0]['lr']:.2e}")
+        
+        # Đánh giá R@1 ngay lập tức
+        if val_loader is not None:
+            print(f"📊 Đang đánh giá Epoch {epoch} trên tập Validation...")
+            try:
+                (acc, div, _), _ = evaluate_agent_accuracy(model, val_loader, device, templates)
+                print(f"✅ Hết Epoch {epoch} - R@1 (Accuracy): {acc:.2f}% | Diversity: {div}")
+            except Exception as e:
+                print(f"⚠️ Lỗi khi đánh giá: {e}")
         
         # Save checkpiont (Local và Backup vào Drive nếu đang chạy Colab)
         local_path = f"checkpoints/hrgr_epoch_{epoch}.pth"

@@ -13,6 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.models.multimodal import MultimodalModel
 from src.data.dataset import MedicalImageTextDataset
 from src.engine.trainer import MultimodalTrainer
+from scripts.evaluate import evaluate_retrieval
 
 def load_config(config_path="configs/default.yaml"):
     """Đọc file tùy chỉnh siêu tham số YAML"""
@@ -86,6 +87,14 @@ def main():
         trainer.train_epoch(train_loader, epoch)
         val_loss = trainer.validate(val_loader, epoch)
         
+        # --- THÊM PHẦN ĐÁNH GIÁ R@1 NGAY TẠI ĐÂY ---
+        print(f"\n📊 Đang đánh giá chỉ số R@1 (Retrieval) cho Epoch {epoch}...")
+        try:
+            i2t, t2i = evaluate_retrieval(model, val_loader, device)
+            print(f"✅ Epoch {epoch} - R@1: {i2t[0]:.2f}% | R@5: {i2t[1]:.2f}% | R@10: {i2t[2]:.2f}%")
+        except Exception as e:
+            print(f"⚠️ Lỗi khi đánh giá R@1: {e}")
+            
         # Nhớ lại mô hình "chất lượng Nhất" để lưu qua từng vòng
         if val_loss < best_val_loss:
             best_val_loss = val_loss
