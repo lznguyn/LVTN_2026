@@ -24,7 +24,7 @@ class HRGRRLTrainer:
         self.weights = self._calculate_class_weights().to(device)
         print(f"⚖️ Applied Class Weights for Policy: {self.weights[:5].tolist()}...")
 
-        self.criterion_policy = nn.CrossEntropyLoss(weight=self.weights)
+        self.criterion_policy = nn.CrossEntropyLoss(weight=self.weights, label_smoothing=0.1)
         self.criterion_stop = nn.BCEWithLogitsLoss()
         self.criterion_word = nn.CrossEntropyLoss(ignore_index=0) # Index 0 is <pad>
         
@@ -97,8 +97,8 @@ class HRGRRLTrainer:
         for i in range(num_classes):
             count = counts.get(i, 1) # Tránh chia cho 0
             # Công thức: weight = Total / (n_classes * count)
-            # Dùng mũ 0.8 để trọng số mạnh hơn mũ 0.5 cũ, ép model học lớp hiếm
-            weights[i] = (total / (count)) ** 0.8 
+            # Dùng mũ 0.5 để cân bằng giữa lớp hiếm và lớp phổ biến
+            weights[i] = (total / (count)) ** 0.5 
             
         # Chuẩn hóa để trọng số trung bình = 1
         weights = weights / weights.mean()
@@ -192,8 +192,8 @@ class HRGRRLTrainer:
                 loss_s = self.criterion_stop(s_logits.squeeze(-1), t_stops)
                 loss_w = self.criterion_word(w_logits.reshape(-1, w_logits.size(-1)), t_words.reshape(-1))
                 
-                # Nhân 5.0 cho Policy Loss để ép mô hình ưu tiên chọn đúng Template/Bệnh lý
-                loss = 5.0 * loss_p + loss_s + loss_w
+                # Đã loại bỏ trọng số nhân 10.0 để mô hình không bị "hoảng loạn"
+                loss = loss_p + loss_s + loss_w
             
             # 4. Backward & Step với Scaler
             if self.scaler:
