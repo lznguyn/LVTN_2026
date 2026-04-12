@@ -78,11 +78,6 @@ def train_hrgr():
         else:
             print("⚠️ Cảnh báo: Không tìm thấy trọng số tương thích với Image Encoder.")
     
-    # 5. Đóng băng Image Encoder (Freeze) - Cần thiết cho bản Base hội tụ ổn định
-    print("❄️ Freezing Image Encoder for stable training...")
-    for param in model.image_encoder.parameters():
-        param.requires_grad = False
-    
     # 5. Khởi tạo Trainer
     trainer = HRGRRLTrainer(model, vocab, templates, config, device=device)
 
@@ -111,13 +106,6 @@ def train_hrgr():
     # 6. Training Loop (MLE Phase)
     print(f"🚀 Starting MLE Training from Epoch {start_epoch} to {config['training']['epochs']}...")
     for epoch in range(start_epoch, config['training']['epochs'] + 1):
-        # TỰ ĐỘNG UNFREEZE SAU EPOCH 5 ĐỂ TỐI ƯU R@1
-        # TỰ ĐỘNG UNFREEZE SAU EPOCH 2 ĐỂ TỐI ƯU R@1 (Bắt đầu từ Epoch 3)
-        if epoch == 3:
-            trainer.unfreeze_encoder(encoder_lr=5e-6)
-        elif start_epoch > 2 and epoch == start_epoch: # Nếu resume từ epoch 3 trở đi
-            trainer.unfreeze_encoder(encoder_lr=5e-6)
-
         loss = trainer.train_epoch_mle(dataloader, epoch)
         # Cập nhật LR
         trainer.scheduler.step()

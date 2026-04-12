@@ -7,17 +7,17 @@ data:
 
 model:
   embed_dim: 512
-  image_encoder: "swinv2_tiny_window16_256"
+  image_encoder: "swinv2_base_window12to16_192to256"
   text_encoder: "emilyalsentzer/Bio_ClinicalBERT"
   temperature: 0.07
 
 training:
   batch_size: 8              # <--- Nạp 8 ảnh/lượt
   gradient_accumulation_steps: 16 # <--- Tổng batch thực tế = 8 * 16 = 128
-  epochs: 20                  # <--- Huấn luyện lâu hơn để hội tụ tốt
-  lr: 0.00005
+  epochs: 10                  # <--- Huấn luyện lâu hơn để hội tụ tốt
+  lr: 0.00002
   weight_decay: 0.05          # <--- Tăng nhẹ để tránh Overfitting
   num_workers: 4
-  max_steps_per_epoch: null  # <--- Học hết toàn bộ tập dữ liệu mỗi epoch
+  max_steps_per_epoch: 2000  # <--- Học hết toàn bộ tập dữ liệu mỗi epoch
   log_every_n_steps: 10
   checkpoint_dir: "checkpoints/"
