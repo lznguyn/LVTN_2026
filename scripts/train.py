@@ -78,7 +78,7 @@ def main():
     trainer = MultimodalTrainer(model, config, device=device)
     
     epochs = config['training']['epochs']
-    best_val_loss = float('inf')
+    best_r1 = 0.0
     
     # Tạo thư mục chứa tệp file .pth Weights cuối cùng
     os.makedirs(config['training']['checkpoint_dir'], exist_ok=True)
@@ -89,18 +89,20 @@ def main():
         
         # --- THÊM PHẦN ĐÁNH GIÁ R@1 NGAY TẠI ĐÂY ---
         print(f"\n📊 Đang đánh giá chỉ số R@1 (Retrieval) cho Epoch {epoch}...")
+        current_r1 = 0.0
         try:
             i2t, t2i = evaluate_retrieval(model, val_loader, device)
             print(f"✅ Epoch {epoch} - R@1: {i2t[0]:.2f}% | R@5: {i2t[1]:.2f}% | R@10: {i2t[2]:.2f}%")
+            current_r1 = i2t[0]
         except Exception as e:
             print(f"⚠️ Lỗi khi đánh giá R@1: {e}")
             
-        # Nhớ lại mô hình "chất lượng Nhất" để lưu qua từng vòng
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        # Nhớ lại mô hình "chất lượng Nhất" dựa trên điểm R@1 cao nhất
+        if current_r1 > best_r1:
+            best_r1 = current_r1
             ckpt_path = os.path.join(config['training']['checkpoint_dir'], "best_model.pth")
             torch.save(model.state_dict(), ckpt_path)
-            print(f"⭐ [CÓ CẢI THIỆN] - Đã chép file kết quả ghi đè vào: {ckpt_path}")
+            print(f"⭐ [CÓ CẢI THIỆN R@1 = {best_r1:.2f}%] - Đã chép file kết quả ghi đè vào: {ckpt_path}")
             
             # --- TỰ ĐỘNG BACKUP VÀO BÊN TRONG GOOGLE DRIVE ---
             drive_dir = "/content/drive/MyDrive/Multimodal_Checkpoints"
