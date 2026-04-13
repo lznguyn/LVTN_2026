@@ -87,22 +87,24 @@ def main():
         trainer.train_epoch(train_loader, epoch)
         val_loss = trainer.validate(val_loader, epoch)
         
-        # --- THÊM PHẦN ĐÁNH GIÁ R@1 NGAY TẠI ĐÂY ---
-        print(f"\n📊 Đang đánh giá chỉ số R@1 (Retrieval) cho Epoch {epoch}...")
+        # --- ĐÁNH GIÁ R@1 TRÊN EMA MODEL (ổn định hơn raw model) ---
+        print(f"\n📊 Đang đánh giá R@1 (Clustering-Guided) cho Epoch {epoch}...")
         current_r1 = 0.0
         try:
-            i2t, t2i = evaluate_retrieval(model, val_loader, device)
-            print(f"✅ Epoch {epoch} - R@1: {i2t[0]:.2f}% | R@5: {i2t[1]:.2f}% | R@10: {i2t[2]:.2f}%")
+            # Dùng trainer.ema_model (EMA weights) thay vì model thô đang train
+            # → R@1 mượt mà, tăng đều, không giật do gradient noise
+            i2t, t2i = evaluate_retrieval(trainer.ema_model, val_loader, device)
+            print(f"✅ Epoch {epoch} [EMA] - R@1: {i2t[0]:.2f}% | R@5: {i2t[1]:.2f}% | R@10: {i2t[2]:.2f}%")
             current_r1 = i2t[0]
         except Exception as e:
             print(f"⚠️ Lỗi khi đánh giá R@1: {e}")
             
-        # Nhớ lại mô hình "chất lượng Nhất" dựa trên điểm R@1 cao nhất
+        # Lưu checkpoint tốt nhất (lưu EMA weights để suy luận chính xác hơn)
         if current_r1 > best_r1:
             best_r1 = current_r1
             ckpt_path = os.path.join(config['training']['checkpoint_dir'], "best_model.pth")
-            torch.save(model.state_dict(), ckpt_path)
-            print(f"⭐ [CÓ CẢI THIỆN R@1 = {best_r1:.2f}%] - Đã chép file kết quả ghi đè vào: {ckpt_path}")
+            torch.save(trainer.ema_model.state_dict(), ckpt_path)
+            print(f"⭐ [CÓ CẢI THIỆN R@1 = {best_r1:.2f}%] - Lưu EMA weights vào: {ckpt_path}")
             
             # --- TỰ ĐỘNG BACKUP VÀO BÊN TRONG GOOGLE DRIVE ---
             drive_dir = "/content/drive/MyDrive/Multimodal_Checkpoints"

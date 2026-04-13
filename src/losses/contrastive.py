@@ -37,9 +37,8 @@ class ClusteringGuidedContrastiveLoss(nn.Module):
         
         # Target cho hàm cross-entropy vẫn là index của đường chéo chính [0, 1, ..., N-1]
         labels = torch.arange(batch_size, dtype=torch.long, device=device)
-        
-        loss_i = F.cross_entropy(logits_per_image, labels)
-        loss_t = F.cross_entropy(logits_per_text, labels)
+        loss_i = F.cross_entropy(logits_per_image, labels, label_smoothing=0.1)
+        loss_t = F.cross_entropy(logits_per_text, labels, label_smoothing=0.1)
         
         loss = (loss_i + loss_t) / 2
         return loss

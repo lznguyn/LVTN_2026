@@ -1,5 +1,6 @@
 import torch
 import torch.optim as optim
+import copy
 from tqdm import tqdm
 from src.losses.contrastive import ClusteringGuidedContrastiveLoss
 
@@ -8,6 +9,18 @@ class MultimodalTrainer:
         self.model = model.to(device)
         self.device = device
         self.config = config
+
+        # ── EMA Model (Exponential Moving Average) ──────────────────────────
+        # Mục đích: Giữ bản trung bình trượt của weights qua các bước train.
+        # Khi đánh giá R@1, dùng ema_model thay vì model thô đang train.
+        # EMA loại bỏ nhiễu gradient ngắn hạn → R@1 tăng đều, không giật.
+        # Công thức: ema_w = tau * ema_w + (1-tau) * current_w
+        # tau=0.999 → mỗi bước EMA giữ 99.9% giá trị cũ, nhích 0.1% về mới.
+        self.ema_model = copy.deepcopy(model).to(device)
+        for p in self.ema_model.parameters():
+            p.requires_grad_(False)  # EMA không tham gia gradient
+        self.ema_tau = config['training'].get('ema_tau', 0.999)
+        # ────────────────────────────────────────────────────────────────────
         
         # Thêm GradScaler để dùng Mixed Precision (FP16) tăng tốc x2
         self.scaler = torch.amp.GradScaler('cuda') if device == 'cuda' else None
@@ -23,14 +36,34 @@ class MultimodalTrainer:
             temperature=config['model']['temperature']
         ).to(device)
 
-        # Thêm Scheduler: Giảm tốc độ học theo đồ thị hình sin (Cosine Annealing)
-        # Giúp mô hình hội tụ ổn định hơn
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, 
-            T_max=config['training']['epochs'], 
+        # Warmup 5 epoch đầu: LR tăng dần từ 0 -> lr
+        # Sau đó Cosine Annealing giảm dần đến eta_min
+        warmup_epochs = config['training'].get('warmup_epochs', 5)
+        total_epochs = config['training']['epochs']
+        
+        warmup_scheduler = optim.lr_scheduler.LinearLR(
+            self.optimizer,
+            start_factor=0.01,  # Bắt đầu từ 1% LR
+            end_factor=1.0,
+            total_iters=warmup_epochs
+        )
+        cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=total_epochs - warmup_epochs,
             eta_min=1e-6
         )
-        
+        self.scheduler = optim.lr_scheduler.SequentialLR(
+            self.optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[warmup_epochs]
+        )
+
+    def _update_ema(self):
+        """Cập nhật EMA weights sau mỗi optimizer step."""
+        with torch.no_grad():
+            for ema_p, model_p in zip(self.ema_model.parameters(), self.model.parameters()):
+                ema_p.data.mul_(self.ema_tau).add_(model_p.data, alpha=1.0 - self.ema_tau)
+
     def get_lr(self):
         return self.optimizer.param_groups[0]['lr']
         
@@ -62,16 +95,21 @@ class MultimodalTrainer:
             
             if self.scaler:
                 self.scaler.scale(loss).backward()
-                # Chỉ cập nhật trọng số sau mỗi accum_steps
                 if (i + 1) % accum_steps == 0:
+                    # Gradient Clipping: Tránh gradient spike làm R@1 giật lùi
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                     self.optimizer.zero_grad()
+                    self._update_ema()  # ← Cập nhật EMA sau mỗi real optimizer step
             else:
                 loss.backward()
                 if (i + 1) % accum_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     self.optimizer.step()
                     self.optimizer.zero_grad()
+                    self._update_ema()  # ← Cập nhật EMA sau mỗi real optimizer step
             
             total_loss += loss.item() * accum_steps
             pbar.set_postfix({

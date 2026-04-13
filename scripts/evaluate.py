@@ -138,10 +138,23 @@ def evaluate_agent_accuracy(model, dataloader, device, templates):
     return (acc, unique_preds, 0), (acc, unique_preds, 0)
 
 def calculate_recall_chunked(query_embeds, gallery_embeds, device, clusters=None, chunk_size=1000):
+    """
+    Tính R@K theo chiến lược Clustering-Guided (Task 3 - Luận văn):
+
+    Một kết quả truy xuất được tính là ĐÚNG nếu:
+      (a) Exact Match:   Đúng index bệnh nhân gốc (i == j)
+      (b) Cluster Match: Cùng cluster_id → cùng nhóm bệnh ngữ nghĩa
+                         (khác bệnh nhân nhưng cùng "loại bệnh" → không phải Negative thật sự)
+
+    Điều này phù hợp với Task 3: "Nếu ảnh A và báo cáo B thuộc cùng một cụm,
+    sẽ KHÔNG coi chúng là mẫu âm tính của nhau".
+    """
     num_queries = query_embeds.size(0)
     hits_r1, hits_r5, hits_r10 = 0, 0, 0
-    gallery_embeds_gpu = gallery_embeds.to(device).t() 
-    
+    cluster_match_count = 0  # Đếm số lần cluster match được kích hoạt
+
+    gallery_embeds_gpu = gallery_embeds.to(device).t()
+
     if clusters is not None:
         clusters = clusters.to(device)
 
@@ -150,32 +163,42 @@ def calculate_recall_chunked(query_embeds, gallery_embeds, device, clusters=None
         end = min(i + chunk_size, num_queries)
         query_chunk = query_embeds[start:end].to(device)
         sim_chunk = torch.matmul(query_chunk, gallery_embeds_gpu)
-        top10_indices = torch.topk(sim_chunk, 10, dim=1).indices
+        top10_indices = torch.topk(sim_chunk, min(10, sim_chunk.size(1)), dim=1).indices
         targets = torch.arange(start, end, device=device).view(-1, 1)
-        
+
         if clusters is not None:
-            # Lấy danh sách ID cụm của nhóm query và nhóm bị truy xuất
-            query_clusters = clusters[start:end].unsqueeze(1)
-            retrieved_clusters = clusters[top10_indices]
-            
-            # Model đoán TRÚNG nếu Index chỉ đich danh chính xác bệnh nhân đó
+            # ─── Task 3: Clustering-Guided Recall ───────────────────────────
+            query_clusters = clusters[start:end].unsqueeze(1)      # (chunk, 1)
+            retrieved_clusters = clusters[top10_indices]           # (chunk, K)
+
+            # (a) Khớp chính xác index bệnh nhân
             matches_exact = (top10_indices == targets)
-            # Hoặc đoán TRÚNG nếu bệnh nhân được lấy ra nằm chung 1 cụm nhóm bệnh
-            is_valid_cluster = (query_clusters != -1) # Bỏ qua các nhãn lỗi
+
+            # (b) Khớp ngữ nghĩa: cùng nhóm bệnh theo cluster
+            is_valid_cluster = (query_clusters != -1)              # Bỏ nhãn lỗi -1
             matches_cluster = (retrieved_clusters == query_clusters) & is_valid_cluster
-            
-            # Kết hợp cả Cụm (Semantic Match) và Khớp index (Exact Match)
+
+            # Gộp: đúng nếu exact HOẶC semantic cluster match
             matches = matches_exact | matches_cluster
-            
-            hits_r1 += matches[:, :1].any(dim=1).sum().item()
-            hits_r5 += matches[:, :5].any(dim=1).sum().item()
-            hits_r10 += matches[:, :10].any(dim=1).sum().item()
+            cluster_match_count += (matches_cluster[:, :1].any(dim=1) &
+                                    ~matches_exact[:, :1].any(dim=1)).sum().item()
+            # ────────────────────────────────────────────────────────────────
         else:
-            hits_r1 += (top10_indices[:, :1] == targets).any(dim=1).sum().item()
-            hits_r5 += (top10_indices[:, :5] == targets).any(dim=1).sum().item()
-            hits_r10 += (top10_indices[:, :10] == targets).any(dim=1).sum().item()
-        
-    return (hits_r1/num_queries)*100, (hits_r5/num_queries)*100, (hits_r10/num_queries)*100
+            matches = (top10_indices == targets)
+
+        hits_r1  += matches[:, :1].any(dim=1).sum().item()
+        hits_r5  += matches[:, :5].any(dim=1).sum().item()
+        hits_r10 += matches[:, :10].any(dim=1).sum().item()
+
+    r1  = (hits_r1  / num_queries) * 100
+    r5  = (hits_r5  / num_queries) * 100
+    r10 = (hits_r10 / num_queries) * 100
+
+    if clusters is not None and cluster_match_count > 0:
+        print(f"       📌 Cluster-match cứu thêm {cluster_match_count} mẫu vào R@1 "
+              f"({cluster_match_count/num_queries*100:.1f}% của tổng)")
+
+    return r1, r5, r10
 
 def main():
     parser = argparse.ArgumentParser(description='Smart Evaluate Retrieval & Agent')
