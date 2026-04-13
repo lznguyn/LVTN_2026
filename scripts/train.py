@@ -79,8 +79,15 @@ def main():
     
     epochs = config['training']['epochs']
     best_r1 = 0.0
-    
-    # Tạo thư mục chứa tệp file .pth Weights cuối cùng
+
+    # --- TRACKING XU HUONG R@1 (Rolling Average 5 epoch) ---
+    # Muc dich: Loai bo nhieu epoch-by-epoch, nhin thay xu huong thuc su
+    # Tai muc R@1=2-3%, moi epoch dao dong chi la 1-2 mau -> nhieu nguyen chat
+    r1_history = []
+    patience   = 0
+    # ---------------------------------------------------
+
+    # Tao thu muc chua tep file .pth Weights cuoi cung
     os.makedirs(config['training']['checkpoint_dir'], exist_ok=True)
     
     for epoch in range(1, epochs + 1):
@@ -91,8 +98,11 @@ def main():
         print(f"\n📊 Đang đánh giá R@1 (Clustering-Guided) cho Epoch {epoch}...")
         current_r1 = 0.0
         try:
-            # Dùng trainer.ema_model (EMA weights) thay vì model thô đang train
-            # → R@1 mượt mà, tăng đều, không giật do gradient noise
+            # [DEBUG] Đánh giá Raw model để xem model có học được không
+            i2t_raw, _ = evaluate_retrieval(model, val_loader, device)
+            print(f"   🔍 Raw Model  - R@1: {i2t_raw[0]:.2f}% | R@5: {i2t_raw[1]:.2f}%")
+
+            # [CHÍNH] Đánh giá EMA model (mượt hơn, dùng để lưu checkpoint)
             i2t, t2i = evaluate_retrieval(trainer.ema_model, val_loader, device)
             print(f"✅ Epoch {epoch} [EMA] - R@1: {i2t[0]:.2f}% | R@5: {i2t[1]:.2f}% | R@10: {i2t[2]:.2f}%")
             current_r1 = i2t[0]
@@ -115,8 +125,30 @@ def main():
                 shutil.copy(ckpt_path, drive_path)
                 print(f"✅ Đã backup file best_model.pth an toàn vào Google Drive: {drive_path}")
             # ---------------------------------------------------
-            
-    print("\n🎉 HOÀN TẤT QUÁ TRÌNH THỰC THI KHÓA LUẬN!")
+
+        # --- ROLLING AVERAGE: Xu huong R@1 thuc su ---
+        # Tai muc 2-3%, thay doi 0.07% = 1 mau flip -> nhieu thuan tuy
+        # Rolling avg 5 epoch cho thay TREND thuc su cua qua trinh hoc
+        r1_history.append(current_r1)
+        W = 5
+        if len(r1_history) >= W:
+            avg_now  = sum(r1_history[-W:]) / W
+            avg_prev = sum(r1_history[-W-1:-1]) / W if len(r1_history) > W else avg_now
+            if avg_now > avg_prev + 0.01:
+                arrow = "TANG THAT SU"
+                patience = 0
+            elif avg_now < avg_prev - 0.01:
+                arrow = "GIAM THAT SU"
+                patience += 1
+            else:
+                arrow = "ON DINH"
+                patience += 1
+            print(f"   Rolling Avg [{W}-ep]: {avg_now:.2f}%  [{arrow}]  Best: {best_r1:.2f}%")
+            if patience >= 15:
+                print("   WARNING: 15 epoch khong cai thien. Nen kiem tra loss co dang giam khong.")
+        # -----------------------------------------------
+
+    print("\n HOAN TAT QUA TRINH THUC THI KHOA LUAN!")
 
 if __name__ == "__main__":
     main()

@@ -22,4 +22,5 @@ training:
   max_steps_per_epoch: null  # <--- Học hết toàn bộ tập dữ liệu mỗi epoch
   log_every_n_steps: 10
   checkpoint_dir: "checkpoints/"
-  ema_tau: 0.999               # <--- EMA decay: càng gần 1 thì R@1 càng mượt
+  ema_tau: 0.99                # <--- 0.999 quá cao cho ~47 steps/epoch → EMA ~75% random weights
+                               #      0.99 → sau 280 steps chỉ còn 6% random, 94% trained ✓

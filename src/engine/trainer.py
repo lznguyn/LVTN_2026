@@ -36,26 +36,15 @@ class MultimodalTrainer:
             temperature=config['model']['temperature']
         ).to(device)
 
-        # Warmup 5 epoch đầu: LR tăng dần từ 0 -> lr
-        # Sau đó Cosine Annealing giảm dần đến eta_min
-        warmup_epochs = config['training'].get('warmup_epochs', 5)
-        total_epochs = config['training']['epochs']
-        
-        warmup_scheduler = optim.lr_scheduler.LinearLR(
+        # CosineAnnealingLR: Giảm LR mượt theo đường cos từ lr → eta_min
+        # KHÔNG dùng warmup vì dataset nhỏ (~47 steps/epoch):
+        #   start_factor=0.01 → LR epoch 1 chỉ là 2e-7 → quá nhỏ
+        #   → projection heads không thoát được anti-aligned state → loss mắc kẹt ở 26
+        # Code gốc (không warmup) đã converge được 17-18% R@1 ở epoch 18-23 ✓
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer,
-            start_factor=0.01,  # Bắt đầu từ 1% LR
-            end_factor=1.0,
-            total_iters=warmup_epochs
-        )
-        cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer,
-            T_max=total_epochs - warmup_epochs,
+            T_max=config['training']['epochs'],
             eta_min=1e-6
-        )
-        self.scheduler = optim.lr_scheduler.SequentialLR(
-            self.optimizer,
-            schedulers=[warmup_scheduler, cosine_scheduler],
-            milestones=[warmup_epochs]
         )
 
     def _update_ema(self):
@@ -96,20 +85,21 @@ class MultimodalTrainer:
             if self.scaler:
                 self.scaler.scale(loss).backward()
                 if (i + 1) % accum_steps == 0:
-                    # Gradient Clipping: Tránh gradient spike làm R@1 giật lùi
                     self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    # max_norm=5.0 phù hợp với SwinV2 (grad norm thường ~3-8)
+                    # Trước đây 1.0 → cắt gradient quá mạnh → model không học được
+                    grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                     self.optimizer.zero_grad()
-                    self._update_ema()  # ← Cập nhật EMA sau mỗi real optimizer step
+                    self._update_ema()
             else:
                 loss.backward()
                 if (i + 1) % accum_steps == 0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
                     self.optimizer.step()
                     self.optimizer.zero_grad()
-                    self._update_ema()  # ← Cập nhật EMA sau mỗi real optimizer step
+                    self._update_ema()
             
             total_loss += loss.item() * accum_steps
             pbar.set_postfix({
