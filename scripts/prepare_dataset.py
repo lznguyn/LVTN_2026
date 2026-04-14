@@ -7,16 +7,16 @@ from tqdm import tqdm
 import time
 
 def download_file(url, filepath, max_retries=5):
-    """Tải file có hiển thị Thanh tiến trình và cơ chế Retry."""
+    """Download file with progress bar and retry mechanism."""
     if os.path.exists(filepath):
-        print(f"File {filepath} đã tồn tại, bỏ qua bước tải mới.")
+        print(f"File {filepath} already exists, skipping download.")
         return
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
-    print(f"Bắt đầu tải từ: {url}")
+    print(f"Starting download from: {url}")
     
     for attempt in range(max_retries):
         try:
@@ -34,37 +34,47 @@ def download_file(url, filepath, max_retries=5):
                 for data in response.iter_content(chunk_size=16384): # Tăng chunk_size để tải nhanh hơn
                     size = file.write(data)
                     bar.update(size)
-            print(f"Tải thành công: {filepath}")
+            print(f"Download successful: {filepath}")
             return
             
         except (requests.exceptions.RequestException, Exception) as e:
-            print(f"\n⚠️ Lần thử {attempt + 1}/{max_retries} thất bại: {str(e)}")
+            print(f"\n⚠️ Attempt {attempt + 1}/{max_retries} failed: {str(e)}")
             if attempt < max_retries - 1:
                 wait_time = (attempt + 1) * 5
-                print(f"Đang thử lại sau {wait_time} giây...")
+                print(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
             else:
-                print("❌ Đã hết số lần thử lại. Vui lòng kiểm tra kết nối internet hoặc Server.")
+                print("❌ No more retries. Please check your internet connection or server status.")
                 raise e
 
 def extract_tgz(filepath, extract_dir):
-    """Giải nén file nén .tgz Linux"""
-    print(f"Đang giải nén {filepath} vào {extract_dir}...")
+    """Extract .tgz files"""
+    print(f"Extracting {filepath} to {extract_dir}...")
     with tarfile.open(filepath, "r:gz") as tar:
         tar.extractall(path=extract_dir)
-    print("Giải nén hoàn tất!")
+    print("Extraction complete!")
 
-def parse_xml_to_csv(xml_dir, images_dir, output_csv):
-    """Phân tích các báo cáo XML, trích xuất text và ráp với ID của file ảnh"""
+def parse_xml_to_csv(xml_dir, images_dir, projections_csv, output_csv):
+    """Parse XML reports, extract text, and map with image IDs and Projection metadata"""
     data_list = []
     
-    # Lấy danh sách file xml (Báo cáo khám bệnh)
+    # Load projection metadata if available
+    projections_df = None
+    if os.path.exists(projections_csv):
+        print(f"📖 Loading metadata from: {projections_csv}")
+        projections_df = pd.read_csv(projections_csv)
+        # Convert ID to string for matching
+        projections_df['id'] = projections_df['id'].astype(str)
+    else:
+        print(f"⚠️ Warning: Projections file {projections_csv} not found. 'projection' column will be empty.")
+
+    # Get list of xml files
     xml_files = [f for f in os.listdir(xml_dir) if f.endswith('.xml')]
     if len(xml_files) == 0:
-        print(f"Cảnh báo: Không tìm thấy file XML nào trong thư mục {xml_dir}.")
+        print(f"Warning: No XML files found in {xml_dir}.")
         return
 
-    print(f"Đang xử lý {len(xml_files)} file báo cáo XML để tạo thành CSDL...")
+    print(f"Processing {len(xml_files)} XML report files...")
     for xml_filename in tqdm(xml_files):
         xml_path = os.path.join(xml_dir, xml_filename)
         
@@ -90,13 +100,23 @@ def parse_xml_to_csv(xml_dir, images_dir, output_csv):
                 img_id = parentimage.get('id')
                 img_path = os.path.abspath(os.path.join(images_dir, f"{img_id}.png"))
                 
-                # Tạo bản ghi ghép giữa Văn bản và Đường dẫn ảnh cụ thể
+                # Tìm thông tin projection (Frontal/Lateral)
+                projection = "Unknown"
+                if projections_df is not None:
+                    # Trong indiana_projections.csv, cột 'id' thường là con số hoặc chuỗi khớp với img_id
+                    match = projections_df[projections_df['id'] == str(img_id)]
+                    if not match.empty:
+                        projection = match['projection'].values[0]
+
+                # Tạo bản ghi ghép giữa Văn bản, Đường dẫn ảnh và View Type
                 data_list.append({
+                    "image_id": img_id,
                     "image_path": img_path,
                     "report": report_text,
+                    "projection": projection
                 })
         except Exception as e:
-            print(f"Lỗi khi xử lý {xml_filename}: {str(e)}")
+            print(f"Error processing {xml_filename}: {str(e)}")
             
     # Chuyển đổi thành dạng Bảng (Dataframe)
     df = pd.DataFrame(data_list)
@@ -105,11 +125,12 @@ def parse_xml_to_csv(xml_dir, images_dir, output_csv):
     valid_mask = df['image_path'].apply(os.path.exists)
     df = df[valid_mask]
     
-    # Lưu ra định dạng CSV để huấn luyện
+    # Save to CSV
     df.to_csv(output_csv, index=False)
-    print(f"✅ Đã tạo CSDL thành công! Tổng cộng: {len(df)} mẫu hợp lệ.")
-    print(f"File lưu tại: {output_csv}")
-    print("Bạn có thể mở file CSV bằng pandas để xem thử cột image_path và report.")
+    print(f"✅ Dataset created successfully! Total valid samples: {len(df)}")
+    print(f"File saved at: {output_csv}")
+    print(f"📊 View Type Distribution:\n{df['projection'].value_counts()}")
+    print("You can open the CSV file using pandas to check the columns.")
 
 if __name__ == "__main__":
     # KHAI BÁO CÁC ĐƯỜNG DẪN TƯƠNG ĐỐI DỰA TRÊN CẤU TRÚC FOLDER
@@ -124,9 +145,13 @@ if __name__ == "__main__":
     # Nguồn: Indiana University Chest X-Rays (Khoảng ~4000 báo cáo và ~7500 bức ảnh)
     REPORTS_URL = "https://openi.nlm.nih.gov/imgs/collections/NLMCXR_reports.tgz"
     IMAGES_URL = "https://openi.nlm.nih.gov/imgs/collections/NLMCXR_png.tgz"
+    # Metadata bổ sung cho Frontal/Lateral views
+    PROJECTIONS_URL = "https://huggingface.co/datasets/sasi2004/chest-xrays-indiana-university/resolve/main/indiana_projections.csv"
     
     reports_tgz = os.path.join(RAW_DATA_DIR, "NLMCXR_reports.tgz")
     images_tgz = os.path.join(RAW_DATA_DIR, "NLMCXR_png.tgz")
+    projections_csv = os.path.join(RAW_DATA_DIR, "indiana_projections.csv")
+    
     reports_unzip_dir = os.path.join(RAW_DATA_DIR, "reports")
     images_unzip_dir = os.path.join(RAW_DATA_DIR, "images")
     
@@ -136,7 +161,7 @@ if __name__ == "__main__":
     # Thời gian tải có thể mất từ 10 - 20 phút (File ảnh nặng khoảng vài GB).
     # =========================================================================
     
-    print("=== BƯỚC 1: TẢI VÀ GIẢI NÉN (Có thể mở file script để kích hoạt nếu chưa tải) ===")
+    print("=== STEP 1: DOWNLOAD AND EXTRACT (Open file to activate if not downloaded) ===")
     
     os.makedirs(reports_unzip_dir, exist_ok=True)
     os.makedirs(images_unzip_dir, exist_ok=True)
@@ -147,8 +172,10 @@ if __name__ == "__main__":
     download_file(IMAGES_URL, images_tgz)
     extract_tgz(images_tgz, images_unzip_dir)
     
-    print("\n=== BƯỚC 2: BUILD DATASET PIPELINE ===")
+    # Tải thêm file metadata projection
+    download_file(PROJECTIONS_URL, projections_csv)
+    
+    print("\n=== STEP 2: BUILD DATASET PIPELINE ===")
     output_csv = os.path.join(PROCESSED_DATA_DIR, "iu_xray_dataset_raw.csv")
-    # Báo cáo XML thực chất được giải nén ra một thư mục con
     actual_xml_dir = os.path.join(reports_unzip_dir, "ecgen-radiology")
-    parse_xml_to_csv(actual_xml_dir, images_unzip_dir, output_csv)
+    parse_xml_to_csv(actual_xml_dir, images_unzip_dir, projections_csv, output_csv)
