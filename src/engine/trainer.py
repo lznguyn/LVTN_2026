@@ -25,10 +25,21 @@ class MultimodalTrainer:
         # Thêm GradScaler để dùng Mixed Precision (FP16) tăng tốc x2
         self.scaler = torch.amp.GradScaler('cuda') if device == 'cuda' else None
         
-        # Khởi tạo thuật toán Toán học tối ưu (Optimizer)
+        # --- TỐI ƯU: Discriminative Learning Rate (Tốc độ học phân biệt) ---
+        # Ngăn việc training quá mạnh làm hỏng kiến thức của Pre-trained backbones
+        lr_projector = float(config['training']['lr'])
+        lr_backbone = lr_projector / 20.0 # Theo benchmark ảnh tham khảo
+        
+        backbone_params = list(self.model.image_encoder.parameters()) + list(self.model.text_encoder.parameters())
+        projector_params = list(self.model.image_proj.parameters()) + list(self.model.text_proj.parameters())
+        
+        params_groups = [
+            {'params': backbone_params, 'lr': lr_backbone, 'name': 'backbone'},
+            {'params': projector_params, 'lr': lr_projector, 'name': 'projector'}
+        ]
+        
         self.optimizer = optim.AdamW(
-            self.model.parameters(), 
-            lr=float(config['training']['lr']), 
+            params_groups, 
             weight_decay=float(config['training']['weight_decay'])
         )
         
@@ -54,7 +65,8 @@ class MultimodalTrainer:
                 ema_p.data.mul_(self.ema_tau).add_(model_p.data, alpha=1.0 - self.ema_tau)
 
     def get_lr(self):
-        return self.optimizer.param_groups[0]['lr']
+        """Trả về tuple (Backbone LR, Projector LR)"""
+        return self.optimizer.param_groups[0]['lr'], self.optimizer.param_groups[1]['lr']
         
     def train_epoch(self, dataloader, epoch):
         self.model.train()
@@ -101,16 +113,19 @@ class MultimodalTrainer:
                     self.optimizer.zero_grad()
                     self._update_ema()
             
+            lr_b, lr_p = self.get_lr()
             total_loss += loss.item() * accum_steps
             pbar.set_postfix({
                 "Loss": f"{loss.item() * accum_steps:.4f}",
-                "LR": f"{self.get_lr():.2e}"
+                "LR_b": f"{lr_b:.2e}",
+                "LR_p": f"{lr_p:.2e}"
             })
             
         avg_loss = total_loss / (max_steps if max_steps else len(dataloader))
         # Cập nhật Scheduler vào cuối vòng lặp Epoch
         self.scheduler.step()
-        print(f"✅ Hết Epoch {epoch} - Trung bình Loss: {avg_loss:.4f} | LR mới: {self.get_lr():.2e}")
+        lr_b, lr_p = self.get_lr()
+        print(f"✅ Hết Epoch {epoch} - Trung bình Loss: {avg_loss:.4f} | LR_b: {lr_b:.2e} | LR_p: {lr_p:.2e}")
         return avg_loss
 
     def validate(self, dataloader, epoch):

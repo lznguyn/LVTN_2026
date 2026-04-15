@@ -98,9 +98,13 @@ def evaluate_retrieval(model, dataloader, device):
     # Gộp tất cả các cluster của dataset lại
     clusters = torch.cat(all_clusters, dim=0) if all_clusters else None
     
-    i2t = calculate_recall_chunked(img_embeds, txt_embeds, device, clusters)
-    t2i = calculate_recall_chunked(txt_embeds, img_embeds, device, clusters)
-    return i2t, t2i
+    # [1] Tính R@K theo chuẩn Strict (phải khớp chính xác Patient ID)
+    r_strict = calculate_recall_chunked(img_embeds, txt_embeds, device, clusters=None)
+    
+    # [2] Tính R@K theo chuẩn Cluster-Aware (khớp Patient ID hoặc cùng Cluster)
+    r_cluster = calculate_recall_chunked(img_embeds, txt_embeds, device, clusters=clusters) if clusters is not None else r_strict
+    
+    return r_strict, r_cluster
 
 @torch.no_grad()
 def evaluate_agent_accuracy(model, dataloader, device, templates):

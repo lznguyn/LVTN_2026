@@ -98,14 +98,13 @@ def main():
         print(f"\n📊 Đang đánh giá R@1 (Clustering-Guided) cho Epoch {epoch}...")
         current_r1 = 0.0
         try:
-            # [DEBUG] Đánh giá Raw model để xem model có học được không
-            i2t_raw, _ = evaluate_retrieval(model, val_loader, device)
-            print(f"   🔍 Raw Model  - R@1: {i2t_raw[0]:.2f}% | R@5: {i2t_raw[1]:.2f}%")
-
             # [CHÍNH] Đánh giá EMA model (mượt hơn, dùng để lưu checkpoint)
-            i2t, t2i = evaluate_retrieval(trainer.ema_model, val_loader, device)
-            print(f"✅ Epoch {epoch} [EMA] - R@1: {i2t[0]:.2f}% | R@5: {i2t[1]:.2f}% | R@10: {i2t[2]:.2f}%")
-            current_r1 = i2t[0]
+            r_strict, r_cluster = evaluate_retrieval(trainer.ema_model, val_loader, device)
+            
+            print(f"✅ Epoch {epoch} [Strict]  - R@1: {r_strict[0]:.2f}% | R@5: {r_strict[1]:.2f}%")
+            print(f"✅ Epoch {epoch} [Cluster] - R@1: {r_cluster[0]:.2f}% | R@5: {r_cluster[1]:.2f}% | R@10: {r_cluster[2]:.2f}%")
+            
+            current_r1 = r_cluster[0]
         except Exception as e:
             print(f"⚠️ Lỗi khi đánh giá R@1: {e}")
             
