@@ -73,6 +73,11 @@ def main():
     
     print(f"Tổng số tham số mạng lưu giữ: {sum(p.numel() for p in model.parameters() if p.requires_grad):,} Parameters")
     
+    # --- ÁP DỤNG MULTI-GPU NẾU CÓ ---
+    if torch.cuda.device_count() > 1:
+        print(f"🔥 Kích hoạt tự động {torch.cuda.device_count()} GPUs chạy song song (DataParallel) 🔥")
+        model = torch.nn.DataParallel(model)
+
     # 3. GIAI ĐOẠN TIẾN HÀNH TRAINING LOOP
     print("\n[4] ⚡ TIẾN HÀNH ĐÀO TẠO MÔ HÌNH VỚI DỮ LIỆU...")
     trainer = MultimodalTrainer(model, config, device=device)
@@ -94,12 +99,12 @@ def main():
         trainer.train_epoch(train_loader, epoch)
         val_loss = trainer.validate(val_loader, epoch)
         
-        # --- ĐÁNH GIÁ R@1 TRÊN EMA MODEL (ổn định hơn raw model) ---
+        # --- ĐÁNH GIÁ R@1 SAU MỖI EPOCH ---
         print(f"\n📊 Đang đánh giá R@1 (Clustering-Guided) cho Epoch {epoch}...")
         current_r1 = 0.0
         try:
-            # [CHÍNH] Đánh giá EMA model (mượt hơn, dùng để lưu checkpoint)
-            r_strict, r_cluster = evaluate_retrieval(trainer.ema_model, val_loader, device)
+            # [CHÍNH] Đánh giá trực tiếp Raw model (do đã gỡ bỏ EMA để tăng Batch)
+            r_strict, r_cluster = evaluate_retrieval(trainer.model, val_loader, device)
             
             print(f"✅ Epoch {epoch} [Strict]  - R@1: {r_strict[0]:.2f}% | R@5: {r_strict[1]:.2f}%")
             print(f"✅ Epoch {epoch} [Cluster] - R@1: {r_cluster[0]:.2f}% | R@5: {r_cluster[1]:.2f}% | R@10: {r_cluster[2]:.2f}%")
@@ -108,12 +113,16 @@ def main():
         except Exception as e:
             print(f"⚠️ Lỗi khi đánh giá R@1: {e}")
             
-        # Lưu checkpoint tốt nhất (lưu EMA weights để suy luận chính xác hơn)
+        # Lưu checkpoint tốt nhất (lưu weights để suy luận chính xác hơn)
         if current_r1 > best_r1:
             best_r1 = current_r1
             ckpt_path = os.path.join(config['training']['checkpoint_dir'], "best_model.pth")
-            torch.save(trainer.ema_model.state_dict(), ckpt_path)
-            print(f"⭐ [CÓ CẢI THIỆN R@1 = {best_r1:.2f}%] - Lưu EMA weights vào: {ckpt_path}")
+            
+            # Xuất đúng định dạng Weight dù có dùng DataParallel hay không
+            model_module = trainer.model.module if isinstance(trainer.model, torch.nn.DataParallel) else trainer.model
+            torch.save(model_module.state_dict(), ckpt_path)
+            
+            print(f"⭐ [CÓ CẢI THIỆN R@1 = {best_r1:.2f}%] - Lưu weights vào: {ckpt_path}")
             
             # --- TỰ ĐỘNG BACKUP VÀO BÊN TRONG GOOGLE DRIVE ---
             drive_dir = "/content/drive/MyDrive/Multimodal_Checkpoints"

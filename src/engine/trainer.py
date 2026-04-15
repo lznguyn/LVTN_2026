@@ -10,18 +10,8 @@ class MultimodalTrainer:
         self.device = device
         self.config = config
 
-        # ── EMA Model (Exponential Moving Average) ──────────────────────────
-        # Mục đích: Giữ bản trung bình trượt của weights qua các bước train.
-        # Khi đánh giá R@1, dùng ema_model thay vì model thô đang train.
-        # EMA loại bỏ nhiễu gradient ngắn hạn → R@1 tăng đều, không giật.
-        # Công thức: ema_w = tau * ema_w + (1-tau) * current_w
-        # tau=0.999 → mỗi bước EMA giữ 99.9% giá trị cũ, nhích 0.1% về mới.
-        self.ema_model = copy.deepcopy(model).to(device)
-        for p in self.ema_model.parameters():
-            p.requires_grad_(False)  # EMA không tham gia gradient
-        self.ema_tau = config['training'].get('ema_tau', 0.999)
-        # ────────────────────────────────────────────────────────────────────
-        
+        # (Đã loại bỏ EMA module nhằm tiết kiệm thẻ nhớ VRAM hỗ trợ Batch lớn)
+
         # Thêm GradScaler để dùng Mixed Precision (FP16) tăng tốc x2
         self.scaler = torch.amp.GradScaler('cuda') if device == 'cuda' else None
         
@@ -30,8 +20,11 @@ class MultimodalTrainer:
         lr_projector = float(config['training']['lr'])
         lr_backbone = lr_projector / 20.0 # Theo benchmark ảnh tham khảo
         
-        backbone_params = list(self.model.image_encoder.parameters()) + list(self.model.text_encoder.parameters())
-        projector_params = list(self.model.image_proj.parameters()) + list(self.model.text_proj.parameters())
+        # Xử lý tương thích với lớp bọc nn.DataParallel 
+        model_module = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
+        
+        backbone_params = list(model_module.image_encoder.parameters()) + list(model_module.text_encoder.parameters())
+        projector_params = list(model_module.image_proj.parameters()) + list(model_module.text_proj.parameters())
         
         params_groups = [
             {'params': backbone_params, 'lr': lr_backbone, 'name': 'backbone'},
@@ -58,11 +51,6 @@ class MultimodalTrainer:
             eta_min=1e-6
         )
 
-    def _update_ema(self):
-        """Cập nhật EMA weights sau mỗi optimizer step."""
-        with torch.no_grad():
-            for ema_p, model_p in zip(self.ema_model.parameters(), self.model.parameters()):
-                ema_p.data.mul_(self.ema_tau).add_(model_p.data, alpha=1.0 - self.ema_tau)
 
     def get_lr(self):
         """Trả về tuple (Backbone LR, Projector LR)"""
@@ -104,14 +92,12 @@ class MultimodalTrainer:
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                     self.optimizer.zero_grad()
-                    self._update_ema()
             else:
                 loss.backward()
                 if (i + 1) % accum_steps == 0:
                     grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
                     self.optimizer.step()
                     self.optimizer.zero_grad()
-                    self._update_ema()
             
             lr_b, lr_p = self.get_lr()
             total_loss += loss.item() * accum_steps

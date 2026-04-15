@@ -12,14 +12,13 @@ model:
   temperature: 0.07
 
 training:
-  batch_size: 16             # <--- Nạp 16 ảnh/lượt (tăng để có nhiều Negatives hơn)
-  gradient_accumulation_steps: 8  # <--- Tổng batch thực tế = 16 * 8 = 128
+  batch_size: 64             # <--- Chạy Multi-GPU T4 x2, mỗi card gánh 32 ảnh
+  gradient_accumulation_steps: 2  # <--- Tổng batch thực tế = 64 * 2 = 128
   epochs: 100
-  lr: 0.0001
+  lr: 0.0002
   warmup_epochs: 5            # <--- Khởi động nhẹ 5 epoch đầu để ổn định
   weight_decay: 0.05          # <--- Tăng nhẹ để tránh Overfitting
   num_workers: 4
   max_steps_per_epoch: null  # <--- Học hết toàn bộ tập dữ liệu mỗi epoch
   log_every_n_steps: 10
   checkpoint_dir: "checkpoints/"
-  ema_tau: 0.99
