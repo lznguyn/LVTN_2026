@@ -63,8 +63,19 @@ def parse_xml_to_csv(xml_dir, images_dir, projections_csv, output_csv):
     if os.path.exists(projections_csv):
         print(f"📖 Loading metadata from: {projections_csv}")
         projections_df = pd.read_csv(projections_csv)
-        # Convert ID to string for matching
-        projections_df['id'] = projections_df['id'].astype(str)
+        
+        # Determine the ID column (could be 'id' or 'filename')
+        id_col = 'id' if 'id' in projections_df.columns else 'filename'
+        
+        # Create a standardized 'match_id' for robust matching
+        # Removes extensions like .dcm.png and prefixes like CXR
+        def normalize_id(x):
+            if pd.isna(x): return x
+            x = str(x).split('.')[0] # Remove extensions
+            if x.startswith('CXR'): x = x[3:] # Remove CXR prefix if present
+            return x
+
+        projections_df['match_id'] = projections_df[id_col].apply(normalize_id)
     else:
         print(f"⚠️ Warning: Projections file {projections_csv} not found. 'projection' column will be empty.")
 
@@ -103,8 +114,11 @@ def parse_xml_to_csv(xml_dir, images_dir, projections_csv, output_csv):
                 # Tìm thông tin projection (Frontal/Lateral)
                 projection = "Unknown"
                 if projections_df is not None:
-                    # Trong indiana_projections.csv, cột 'id' thường là con số hoặc chuỗi khớp với img_id
-                    match = projections_df[projections_df['id'] == str(img_id)]
+                    # Normalize img_id for matching (removing CXR prefix if present)
+                    norm_img_id = str(img_id).split('.')[0]
+                    if norm_img_id.startswith('CXR'): norm_img_id = norm_img_id[3:]
+                    
+                    match = projections_df[projections_df['match_id'] == norm_img_id]
                     if not match.empty:
                         projection = match['projection'].values[0]
 
