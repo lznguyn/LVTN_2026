@@ -20,8 +20,20 @@ def load_config(config_path="configs/default.yaml"):
     with open(config_path, "r", encoding="utf8") as f:
         return yaml.safe_load(f)
 
-def get_transforms(image_size):
-    """Ảnh ImageNet được Normalize theo tiêu chuẩn thế giới"""
+def get_train_transforms(image_size):
+    """Data Augmentation cho tập Train để chống Overfitting"""
+    return transforms.Compose([
+        transforms.Resize((image_size + 32, image_size + 32)), # Phóng to một chút
+        transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)), # Cắt ngẫu nhiên
+        transforms.RandomHorizontalFlip(), # Lật ngang
+        transforms.RandomRotation(15), # Xoay nhẹ
+        transforms.ColorJitter(brightness=0.2, contrast=0.2), # Chỉnh sáng tối nhẹ
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+def get_val_transforms(image_size):
+    """Transform chuẩn cho tập Validation/Test"""
     return transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
@@ -43,7 +55,8 @@ def main():
     print("\n[1] Đang nạp bộ từ điển Tokenizer của mô hình ClinicalBERT...")
     # Tải Tokenizer chuyên dụng cho dữ liệu sinh khoa/y tế
     tokenizer = AutoTokenizer.from_pretrained(config['model']['text_encoder'])
-    image_transform = get_transforms(config['data']['image_size'])
+    train_transform = get_train_transforms(config['data']['image_size'])
+    val_transform = get_val_transforms(config['data']['image_size'])
     
     print("[2] Đang Load Database...")
     try:
@@ -54,8 +67,8 @@ def main():
         print("💡 Chú ý: Hãy phải chạy Python trên 2 file prepare_dataset.py và create_clusters.py trước!")
         return
 
-    train_dataset = MedicalImageTextDataset(train_df, image_transform, tokenizer, config['data']['max_text_length'])
-    val_dataset = MedicalImageTextDataset(val_df, image_transform, tokenizer, config['data']['max_text_length'])
+    train_dataset = MedicalImageTextDataset(train_df, train_transform, tokenizer, config['data']['max_text_length'])
+    val_dataset = MedicalImageTextDataset(val_df, val_transform, tokenizer, config['data']['max_text_length'])
     
     # Sửa lỗi Threading/Crash của hệ điều hành Windows khi gọi num_workers > 0
     num_workers = 0 if os.name == 'nt' else config['training']['num_workers']
