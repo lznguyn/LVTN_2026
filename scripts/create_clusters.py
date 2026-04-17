@@ -120,4 +120,4 @@ if __name__ == "__main__":
         print(f"❌ Không tìm thấy: {INPUT_CSV}")
         print("   → Hãy chạy prepare_dataset.py trước!")
     else:
-        create_text_clusters(INPUT_CSV, TRAIN_CSV, VAL_CSV, n_clusters=N_CLUSTERS)
+        create_text_clusters(INPUT_CSV, TRAIN_CSV, VAL_CSV, n_components=N_COMPONENTS)
