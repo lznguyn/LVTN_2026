@@ -4,14 +4,16 @@ from PIL import Image
 from torchvision import transforms
 
 class MedicalImageTextDataset(Dataset):
-    def __init__(self, data_frame, image_transform=None, text_tokenizer=None, max_length=128):
+    def __init__(self, data_frame, image_transform=None, text_tokenizer=None, max_length=128, soft_labels=None):
         """
         data_frame: Pandas DataFrame chứa các cột ['image_path', 'report', 'cluster_id']
+        soft_labels: Numpy array (N, K) chứa xác suất cụm mềm
         """
         self.df = data_frame
         self.image_transform = image_transform
         self.tokenizer = text_tokenizer
         self.max_length = max_length
+        self.soft_labels = soft_labels
 
     def __len__(self):
         return len(self.df)
@@ -25,23 +27,6 @@ class MedicalImageTextDataset(Dataset):
         if self.image_transform:
             image = self.image_transform(image)
         
-        # Đọc dữ liệu ảnh cũ (Old/Baseline) - Nếu không có thì lấy chính ảnh hiện tại
-        old_img_path = row.get('old_image_path', img_path)
-        # Kiểm tra nếu old_img_path là NaN hoặc rỗng
-        if not isinstance(old_img_path, str) or old_img_path.strip() == "" or old_img_path.lower() == "nan":
-            old_img_path = img_path
-            
-        try:
-            old_image_pil = Image.open(old_img_path).convert('RGB')
-        except Exception:
-            # Fallback nếu đường dẫn ảnh cũ lỗi
-            old_image_pil = Image.open(img_path).convert('RGB')
-            
-        if self.image_transform:
-            old_image = self.image_transform(old_image_pil)
-        else:
-            old_image = transforms.ToTensor()(old_image_pil) # Safe fallback
-            
         # Tokenize (Số hóa) dạng văn bản báo cáo theo độ dài Max cho phép
         text = str(row['report'])
         text_inputs = self.tokenizer(
@@ -57,12 +42,19 @@ class MedicalImageTextDataset(Dataset):
             cluster_id = torch.tensor(row['cluster_id'], dtype=torch.long)
         else:
             cluster_id = torch.tensor(-1, dtype=torch.long)
+            
+        # --- MỚI: Lấy nhãn cụm MỀM (Soft Label) ---
+        if self.soft_labels is not None:
+            soft_label = torch.tensor(self.soft_labels[idx], dtype=torch.float32)
+        else:
+            # Nếu không có nhãn mềm, tạo vector zero (không ảnh hưởng đến loss mới)
+            soft_label = torch.zeros(50, dtype=torch.float32)
         
         return {
             'image': image,
-            'image_old': old_image,
             'input_ids': text_inputs['input_ids'].squeeze(0),
             'attention_mask': text_inputs['attention_mask'].squeeze(0),
             'cluster_id': cluster_id,
+            'soft_label': soft_label,
             'raw_report': text
         }

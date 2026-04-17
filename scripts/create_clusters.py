@@ -20,73 +20,86 @@ import os
 import pandas as pd
 import numpy as np
 from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
+from sklearn.decomposition import PCA
 from sentence_transformers import SentenceTransformer
 
 # =========================================================
-# Số cụm tối ưu cho IU X-Ray dataset (~7500 ảnh, ~3500 report)
-# Công thức thực nghiệm: n_clusters ~ sqrt(N/2)
-# Với N~3500 báo cáo → sqrt(1750) ≈ 42 → làm tròn lên 50
+# Cấu hình Phân cụm Mềm (Soft Clustering)
+# N_COMPONENTS: Số lượng cụm (bệnh lý)
+# PCA_DIM: Giảm chiều để GMM hoạt động ổn định trên tập dữ liệu nhỏ
 # =========================================================
-N_CLUSTERS = 50
+N_COMPONENTS = 50
+PCA_DIM = 32 # Giảm từ 384 -> 32 chiều
 
-def create_text_clusters(input_csv, output_train_csv, output_val_csv, n_clusters=N_CLUSTERS):
+def create_text_clusters(input_csv, output_train_csv, output_val_csv, n_components=N_COMPONENTS):
     print("=" * 60)
-    print("TASK 3: CLUSTERING-GUIDED NEGATIVE SAMPLING")
-    print(f"Mục tiêu: Phân {n_clusters} cụm ngữ nghĩa báo cáo y tế")
+    print("TASK 3: SOFT CLUSTERING-GUIDED NEGATIVE SAMPLING (GMM)")
+    print(f"Mục tiêu: Phân {n_components} cụm xác suất bằng Gaussian Mixture")
     print("=" * 60)
 
-    # ─────────────────────────────────────────────
-    # BƯỚC 1: Đọc dữ liệu đầu vào
-    # ─────────────────────────────────────────────
+    # 1. Đọc dữ liệu
     print("\n[1] Đọc dữ liệu...")
     df = pd.read_csv(input_csv)
-    print(f"    Tổng số mẫu: {len(df)}")
-
     reports = df['report'].fillna("").tolist()
 
-    # ─────────────────────────────────────────────
-    # BƯỚC 2: Text Embedding với Sentence-BERT
-    # (Dùng MiniLM vì nhẹ, nhanh, độ chính xác tốt)
-    # Có thể thay bằng Bio_ClinicalBERT để cải thiện
-    # ─────────────────────────────────────────────
+    # 2. Text Embedding với Sentence-BERT
     print("\n[2] Trích xuất đặc trưng văn bản (Sentence-BERT)...")
-    print("    Đang tải mô hình all-MiniLM-L6-v2...")
-    model = SentenceTransformer('all-MiniLM-L6-v2')
+    st_model = SentenceTransformer('all-MiniLM-L6-v2')
+    embeddings = st_model.encode(reports, show_progress_bar=True, batch_size=64)
+    
+    # --- MỚI: Giảm chiều PCA để GMM ổn định hơn ---
+    print(f"\n[2.1] Giảm chiều PCA (384 -> {PCA_DIM})...")
+    pca = PCA(n_components=PCA_DIM, random_state=42)
+    embeddings_pca = pca.fit_transform(embeddings)
+    print(f"    ✅ Tổng phương sai giữ lại: {np.sum(pca.explained_variance_ratio_)*100:.1f}%")
 
-    print("    Đang encode toàn bộ báo cáo thành vector 384 chiều...")
-    embeddings = model.encode(reports, show_progress_bar=True, batch_size=64)
-    print(f"    ✅ Đặc trưng thu được: shape = {embeddings.shape}")
-
-    # ─────────────────────────────────────────────
-    # BƯỚC 3: K-Means Clustering
-    # Phân báo cáo thành n_clusters nhóm bệnh ngữ nghĩa
-    # ─────────────────────────────────────────────
-    print(f"\n[3] K-Means phân cụm (n_clusters={n_clusters})...")
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init='auto', max_iter=500)
-    cluster_ids = kmeans.fit_predict(embeddings)
+    # 3. Gaussian Mixture Model (Soft Clustering)
+    print(f"\n[3] GMM Phân cụm mềm (n_components={n_components})...")
+    gmm = GaussianMixture(n_components=n_components, random_state=42, covariance_type='diag', max_iter=200)
+    gmm.fit(embeddings_pca)
+    
+    # Lấy xác suất thuộc về từng cụm (Soft Labels)
+    soft_labels = gmm.predict_proba(embeddings_pca) # (N, 50)
+    # Lấy ID cụm cao nhất để tương thích với code cũ (Hard Labels)
+    cluster_ids = np.argmax(soft_labels, axis=1)
 
     df['cluster_id'] = cluster_ids
+    # Lưu index gốc để map với file .npy sau này
+    df['data_idx'] = range(len(df))
 
-    # Phân tích phân phối: mỗi cụm có bao nhiêu mẫu?
-    sizes = df['cluster_id'].value_counts().sort_index()
-    print(f"\n    Phân phối số mẫu/cụm:")
-    print(f"    Min: {sizes.min()} | Max: {sizes.max()} | TB: {sizes.mean():.1f} mẫu/cụm")
-    print(f"\n    TOP 10 cụm lớn nhất:")
-    print(sizes.head(10).to_string())
-
-    # ─────────────────────────────────────────────
-    # BƯỚC 4: Chia Train / Val (80/20), lưu CSV
-    # ─────────────────────────────────────────────
+    # 4. Chia Train / Val (80/20)
     print(f"\n[4] Chia tập Train/Val và lưu kết quả...")
-    df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+    # Shuffle đồng bộ cả DF và ma trận Soft Labels
+    indices = np.random.permutation(len(df))
+    df = df.iloc[indices].reset_index(drop=True)
+    soft_labels = soft_labels[indices]
 
     train_size = int(0.8 * len(df))
     train_df = df.iloc[:train_size].copy()
     val_df   = df.iloc[train_size:].copy()
+    
+    train_soft = soft_labels[:train_size]
+    val_soft   = soft_labels[train_size:]
 
+    # Lưu file CSV cho metadata
     os.makedirs(os.path.dirname(output_train_csv), exist_ok=True)
     train_df.to_csv(output_train_csv, index=False)
     val_df.to_csv(output_val_csv,   index=False)
+
+    # Lưu file .npy cho Soft Labels (Xác suất)
+    # File này sẽ được Dataset nạp vào khi train
+    processed_dir = os.path.dirname(input_csv)
+    np.save(os.path.join(processed_dir, "soft_labels_train.npy"), train_soft)
+    np.save(os.path.join(processed_dir, "soft_labels_val.npy"), val_soft)
+
+    print(f"    ✅ Train CSV: {len(train_df)} mẫu  | Soft Labels: {train_soft.shape}")
+    print(f"    ✅ Val CSV:   {len(val_df)} mẫu  | Soft Labels: {val_soft.shape}")
+    print(f"    📂 Soft labels saved at: {processed_dir}")
+
+    print("\n" + "=" * 60)
+    print("🎉 HOÀN TẤT! Hãy chạy train.py để huấn luyện với nhãn MỀM.")
+    print("=" * 60)
 
     print(f"    ✅ Train: {len(train_df)} mẫu  → {output_train_csv}")
     print(f"    ✅ Val:   {len(val_df)} mẫu  → {output_val_csv}")

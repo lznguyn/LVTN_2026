@@ -87,12 +87,13 @@ class MultimodalTrainer:
             input_ids = batch['input_ids'].to(self.device, non_blocking=True)
             attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
             cluster_ids = batch['cluster_id'].to(self.device, non_blocking=True)
+            soft_labels = batch['soft_label'].to(self.device, non_blocking=True)
             
             # --- TỐI ƯU: Mixed Precision + Accumulation ---
             device_type = 'cuda' if 'cuda' in str(self.device) else 'cpu'
             with torch.amp.autocast(device_type=device_type):
                 img_embeds, txt_embeds = self.model(images, input_ids, attention_mask)
-                loss = self.criterion(img_embeds, txt_embeds, cluster_ids)
+                loss = self.criterion(img_embeds, txt_embeds, cluster_ids, soft_labels=soft_labels)
                 # Chia loss cho số bước tích lũy
                 loss = loss / accum_steps
             
@@ -140,12 +141,13 @@ class MultimodalTrainer:
                 input_ids = batch['input_ids'].to(self.device, non_blocking=True)
                 attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
                 cluster_ids = batch['cluster_id'].to(self.device, non_blocking=True)
+                soft_labels = batch['soft_label'].to(self.device, non_blocking=True)
                 
                 img_embeds, txt_embeds = self.model(
                     images, input_ids, attention_mask
                 )
                 
-                loss = self.criterion(img_embeds, txt_embeds, cluster_ids)
+                loss = self.criterion(img_embeds, txt_embeds, cluster_ids, soft_labels=soft_labels)
                 total_loss += loss.item()
                 pbar.set_postfix({"Val Loss": f"{loss.item():.4f}"})
                 

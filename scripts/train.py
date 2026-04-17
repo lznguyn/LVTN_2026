@@ -2,6 +2,7 @@ import os
 import yaml
 import torch
 import pandas as pd
+import numpy as np
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from transformers import AutoTokenizer
@@ -45,7 +46,7 @@ def get_val_transforms(image_size):
 
 def main():
     print("==================================================================")
-    print("🚀 LUẬN VĂN: HUẤN LUYỆN MULTIMODAL CLUSTERING-GUIDED NEGATIVE SAMPLING 🚀")
+    print("🚀 LUẬN VĂN: HUẤN LUYỆN MULTIMODAL SOFT CLUSTERING-GUIDED NEGATIVE SAMPLING 🚀")
     print("==================================================================")
     
     # Kích hoạt sử dụng GPU để train Nhanh hơn (Nếu máy bạn có Card rời NVIDIA)
@@ -65,13 +66,19 @@ def main():
     try:
         train_df = pd.read_csv(config['data']['train_csv'])
         val_df = pd.read_csv(config['data']['val_csv'])
+        
+        # --- MỚI: Load nhãn cụm MỀM (Soft Labels) ---
+        processed_dir = "data/processed"
+        train_soft = np.load(os.path.join(processed_dir, "soft_labels_train.npy"))
+        val_soft   = np.load(os.path.join(processed_dir, "soft_labels_val.npy"))
+        print(f"✅ Đã nạp nhãn mềm GMM: Train {train_soft.shape} | Val {val_soft.shape}")
     except Exception as e:
-        print(f"❌ Không tìm thấy file. Lỗi: {e}")
+        print(f"❌ Lỗi khi load dữ liệu: {e}")
         print("💡 Chú ý: Hãy phải chạy Python trên 2 file prepare_dataset.py và create_clusters.py trước!")
         return
 
-    train_dataset = MedicalImageTextDataset(train_df, train_transform, tokenizer, config['data']['max_text_length'])
-    val_dataset = MedicalImageTextDataset(val_df, val_transform, tokenizer, config['data']['max_text_length'])
+    train_dataset = MedicalImageTextDataset(train_df, train_transform, tokenizer, config['data']['max_text_length'], soft_labels=train_soft)
+    val_dataset = MedicalImageTextDataset(val_df, val_transform, tokenizer, config['data']['max_text_length'], soft_labels=val_soft)
     
     # Sửa lỗi Threading/Crash của hệ điều hành Windows khi gọi num_workers > 0
     num_workers = 0 if os.name == 'nt' else config['training']['num_workers']
