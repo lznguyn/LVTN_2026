@@ -13,11 +13,11 @@ model:
 
 training:
   batch_size: 32             # <--- Giảm xuống 32 (16 ảnh / 1 GPU) để chống OOM
-  gradient_accumulation_steps: 4  # <--- Tổng batch thực tế = 32 * 4 = 128
+  gradient_accumulation_steps: 8  # <--- Tổng batch thực tế = 32 * 4 = 128
   epochs: 100
-  lr: 0.0002
+  lr: 0.00005
   warmup_epochs: 5            # <--- Khởi động nhẹ 5 epoch đầu để ổn định
-  weight_decay: 0.05          # <--- Tăng nhẹ để tránh Overfitting
+  weight_decay: 0.1          # <--- Tăng nhẹ để tránh Overfitting
   num_workers: 4
   max_steps_per_epoch: null  # <--- Học hết toàn bộ tập dữ liệu mỗi epoch
   log_every_n_steps: 10
