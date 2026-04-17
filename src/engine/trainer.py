@@ -40,15 +40,29 @@ class MultimodalTrainer:
             temperature=config['model']['temperature']
         ).to(device)
 
-        # CosineAnnealingLR: Giảm LR mượt theo đường cos từ lr → eta_min
-        # KHÔNG dùng warmup vì dataset nhỏ (~47 steps/epoch):
-        #   start_factor=0.01 → LR epoch 1 chỉ là 2e-7 → quá nhỏ
-        #   → projection heads không thoát được anti-aligned state → loss mắc kẹt ở 26
-        # Code gốc (không warmup) đã converge được 17-18% R@1 ở epoch 18-23 ✓
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        # --- TỐI ƯU: Scheduler với Warmup ---
+        warmup_epochs = config['training'].get('warmup_epochs', 5)
+        epochs = config['training']['epochs']
+
+        # 1. Giai đoạn Warmup: Tăng dần LR từ 1/100 -> full LR
+        warmup_scheduler = optim.lr_scheduler.LinearLR(
+            self.optimizer, 
+            start_factor=0.1,  # <--- Khởi đầu từ 10% LR thay vì 1% để tránh bị kẹt
+            total_iters=warmup_epochs
+        )
+        
+        # 2. Giai đoạn Hội tụ: Giảm dần theo hình Cos
+        cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer,
-            T_max=config['training']['epochs'],
+            T_max=epochs - warmup_epochs,
             eta_min=1e-6
+        )
+
+        # Kết hợp thành chuỗi: Warmup xong rồi mới tới Cosine
+        self.scheduler = optim.lr_scheduler.SequentialLR(
+            self.optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[warmup_epochs]
         )
 
 

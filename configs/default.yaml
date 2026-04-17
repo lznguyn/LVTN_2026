@@ -9,15 +9,15 @@ model:
   embed_dim: 512
   image_encoder: "swinv2_base_window12to16_192to256"
   text_encoder: "emilyalsentzer/Bio_ClinicalBERT"
-  temperature: 0.07
+  temperature: 0.1
 
 training:
   batch_size: 32             # <--- Giảm xuống 32 (16 ảnh / 1 GPU) để chống OOM
   gradient_accumulation_steps: 8  # <--- Tổng batch thực tế = 32 * 4 = 128
   epochs: 100
   lr: 0.00008
-  warmup_epochs: 5            # <--- Khởi động nhẹ 5 epoch đầu để ổn định
-  weight_decay: 0.1          # <--- Tăng nhẹ để tránh Overfitting
+  warmup_epochs: 2            # <--- Giảm xuống 2 để xe "đề pa" nhanh hơn trên tập dữ liệu nhỏ
+  weight_decay: 0.3          # <--- TĂNG MẠNH để tránh Overfitting tuyệt đối
   num_workers: 4
   max_steps_per_epoch: null  # <--- Học hết toàn bộ tập dữ liệu mỗi epoch
   log_every_n_steps: 10

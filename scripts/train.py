@@ -23,11 +23,14 @@ def load_config(config_path="configs/default.yaml"):
 def get_train_transforms(image_size):
     """Data Augmentation cho tập Train để chống Overfitting"""
     return transforms.Compose([
-        transforms.Resize((image_size + 32, image_size + 32)), # Phóng to một chút
-        transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)), # Cắt ngẫu nhiên
-        transforms.RandomHorizontalFlip(), # Lật ngang
-        transforms.RandomRotation(15), # Xoay nhẹ
-        transforms.ColorJitter(brightness=0.2, contrast=0.2), # Chỉnh sáng tối nhẹ
+        transforms.Resize((image_size + 32, image_size + 32)), # Phóng to để chuẩn bị cắt
+        transforms.RandomResizedCrop(image_size, scale=(0.7, 1.0)), # Cắt mạnh hơn một chút
+        transforms.RandomAffine(degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1), shear=10), # Biến dạng hình học
+        transforms.RandomPerspective(distortion_scale=0.2, p=0.5), # Tạo góc nhìn giả lập
+        transforms.RandomHorizontalFlip(), 
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2), # Chỉnh màu mạnh hơn
+        transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.5),
+        transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0)), # Làm mờ ngẫu nhiên để mô hình không bám vào nhiễu pixel
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
