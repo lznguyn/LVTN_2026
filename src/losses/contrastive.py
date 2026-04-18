@@ -33,11 +33,9 @@ class ClusteringGuidedContrastiveLoss(nn.Module):
             soft_fn_mask = semantic_overlap * (1 - positive_mask)
             
             # --- CƠ CHẾ SOFT MASKING (Phiên bản Luận văn - Task 3) ---
-            # Thay vì xóa sổ (-10000), ta gia giảm logits dựa trên độ tương đồng ngữ nghĩa.
-            # Logits mới = Logits cũ - (Độ tương đồng * penalty_factor)
-            # penalty_factor = 20.0 để đẩy các mẫu quá giống nhau ra xa khỏi vùng tranh chấp logit
-            logits_per_image = logits_per_image - (soft_fn_mask * 20.0)
-            logits_per_text = logits_per_text - (soft_fn_mask * 20.0)
+            # Giảm penalty factor từ 20.0 xuống 10.0 để tránh đẩy quá gắt
+            logits_per_image = logits_per_image - (soft_fn_mask * 10.0)
+            logits_per_text = logits_per_text - (soft_fn_mask * 10.0)
         else:
             # Fallback về Hard Masking nếu không có nhãn mềm
             cluster_ids = cluster_ids.view(-1, 1)

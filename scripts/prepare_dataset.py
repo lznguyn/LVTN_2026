@@ -200,6 +200,12 @@ def parse_kaggle_to_csv(kaggle_dir, output_csv):
 
     # Chọn lọc các cột cần thiết để đồng bộ với pipeline hiện tại
     output_df = df[['image_id', 'image_path', 'report', 'projection']]
+    
+    # --- MỚI: Chỉ lấy ảnh góc chụp FRONTAL để tăng độ chính xác ---
+    initial_len = len(output_df)
+    output_df = output_df[output_df['projection'] == 'Frontal']
+    print(f"🎯 Filtered Frontal views: {len(output_df)}/{initial_len} samples.")
+    
     output_df.to_csv(output_csv, index=False)
     
     print(f"✅ Kaggle Dataset transformed successfully! Saved to: {output_csv}")

@@ -127,7 +127,7 @@ def main():
         current_r1 = 0.0
         try:
             # [CHÍNH] Đánh giá trực tiếp Raw model (do đã gỡ bỏ EMA để tăng Batch)
-            r_strict, r_cluster = evaluate_retrieval(trainer.model, val_loader, device)
+            r_strict, r_cluster = evaluate_retrieval(trainer.model, train_loader, device)
             
             print(f"✅ Epoch {epoch} [Strict]  - R@1: {r_strict[0]:.2f}% | R@5: {r_strict[1]:.2f}%")
             print(f"✅ Epoch {epoch} [Cluster] - R@1: {r_cluster[0]:.2f}% | R@5: {r_cluster[1]:.2f}% | R@10: {r_cluster[2]:.2f}%")
