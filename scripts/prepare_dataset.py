@@ -146,6 +146,66 @@ def parse_xml_to_csv(xml_dir, images_dir, projections_csv, output_csv):
     print(f"📊 View Type Distribution:\n{df['projection'].value_counts()}")
     print("You can open the CSV file using pandas to check the columns.")
 
+def parse_kaggle_to_csv(kaggle_dir, output_csv):
+    """Xử lý dữ liệu từ bộ Kaggle raddar/chest-xrays-indiana-university"""
+    print(f"🚀 Detected Kaggle dataset at: {kaggle_dir}")
+    
+    reports_path = os.path.join(kaggle_dir, "indiana_reports.csv")
+    projections_path = os.path.join(kaggle_dir, "indiana_projections.csv")
+    images_dir = os.path.join(kaggle_dir, "images", "images_normalized") # raddar structure
+    
+    # Một số version Kaggle để folder images trực tiếp
+    if not os.path.exists(images_dir):
+        images_dir = os.path.join(kaggle_dir, "images")
+
+    if not os.path.exists(reports_path) or not os.path.exists(projections_path):
+        print(f"❌ Error: Missing CSV files in {kaggle_dir}")
+        return False
+
+    print("📖 Reading Kaggle CSV files...")
+    reports_df = pd.read_csv(reports_path)
+    projections_df = pd.read_csv(projections_path)
+
+    # Convert uid to string for robust merging
+    reports_df['uid'] = reports_df['uid'].astype(str)
+    projections_df['uid'] = projections_df['uid'].astype(str)
+
+    # Merge reports and projections
+    df = pd.merge(projections_df, reports_df, on='uid', how='inner')
+
+    # Gộp findings và impression thành report (giống logic parse XML)
+    df['findings'] = df['findings'].fillna('')
+    df['impression'] = df['impression'].fillna('')
+    df['report'] = df['findings'] + " " + df['impression']
+    df['report'] = df['report'].str.strip()
+
+    # Chỉ giữ các dòng có báo cáo
+    df = df[df['report'] != '']
+
+    # Xây dựng đường dẫn ảnh tuyệt đối
+    # Kaggle filenames trong indiana_projections thường là '1_IM-0001-4001.dcm.png'
+    df['image_path'] = df['filename'].apply(lambda x: os.path.abspath(os.path.join(images_dir, str(x))))
+    df['image_id'] = df['filename'].apply(lambda x: str(x).split('.')[0])
+
+    # Chỉ giữ lại các hàng có file ảnh thực sự tồn tại
+    initial_count = len(df)
+    valid_mask = df['image_path'].apply(os.path.exists)
+    df = df[valid_mask]
+    
+    if len(df) == 0:
+        print(f"❌ Warning: No images found at {images_dir}. Check the folder structure.")
+        return False
+
+    print(f"✅ Filtered {len(df)}/{initial_count} valid image-report pairs.")
+
+    # Chọn lọc các cột cần thiết để đồng bộ với pipeline hiện tại
+    output_df = df[['image_id', 'image_path', 'report', 'projection']]
+    output_df.to_csv(output_csv, index=False)
+    
+    print(f"✅ Kaggle Dataset transformed successfully! Saved to: {output_csv}")
+    print(f"📊 View Type Distribution:\n{output_df['projection'].value_counts()}")
+    return True
+
 if __name__ == "__main__":
     # KHAI BÁO CÁC ĐƯỜNG DẪN TƯƠNG ĐỐI DỰA TRÊN CẤU TRÚC FOLDER
     BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -155,7 +215,19 @@ if __name__ == "__main__":
     os.makedirs(RAW_DATA_DIR, exist_ok=True)
     os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
     
-    # --- THÔNG TIN NGUỒN TẢI ---
+    output_csv = os.path.join(PROCESSED_DATA_DIR, "iu_xray_dataset_raw.csv")
+
+    # --- KIỂM TRA MÔI TRƯỜNG KAGGLE ---
+    KAGGLE_INPUT_DIR = "/kaggle/input/chest-xrays-indiana-university"
+    
+    if os.path.exists(KAGGLE_INPUT_DIR):
+        success = parse_kaggle_to_csv(KAGGLE_INPUT_DIR, output_csv)
+        if success:
+            exit(0) # Kết thúc sớm nếu đã xử lý xong dữ liệu Kaggle
+        else:
+            print("⚠️ Falling back to manual download...")
+
+    # --- THÔNG TIN NGUỒN TẢI (Trường hợp không dùng Kaggle Dataset có sẵn) ---
     # Nguồn: Indiana University Chest X-Rays (Khoảng ~4000 báo cáo và ~7500 bức ảnh)
     REPORTS_URL = "https://openi.nlm.nih.gov/imgs/collections/NLMCXR_reports.tgz"
     IMAGES_URL = "https://openi.nlm.nih.gov/imgs/collections/NLMCXR_png.tgz"
@@ -169,27 +241,24 @@ if __name__ == "__main__":
     reports_unzip_dir = os.path.join(RAW_DATA_DIR, "reports")
     images_unzip_dir = os.path.join(RAW_DATA_DIR, "images")
     
-    # =========================================================================
-    # LƯU Ý QUAN TRỌNG VỀ TẢI DỮ LIỆU:
-    # BỎ COMMENT (xóa dấu #) ở khối code dưới đây nếu bạn muốn TẢI TRỰC TIẾP
-    # Thời gian tải có thể mất từ 10 - 20 phút (File ảnh nặng khoảng vài GB).
-    # =========================================================================
-    
     print("=== STEP 1: DOWNLOAD AND EXTRACT (Open file to activate if not downloaded) ===")
     
     os.makedirs(reports_unzip_dir, exist_ok=True)
     os.makedirs(images_unzip_dir, exist_ok=True)
     
-    download_file(REPORTS_URL, reports_tgz)
-    extract_tgz(reports_tgz, reports_unzip_dir)
-    
-    download_file(IMAGES_URL, images_tgz)
-    extract_tgz(images_tgz, images_unzip_dir)
-    
-    # Tải thêm file metadata projection
-    download_file(PROJECTIONS_URL, projections_csv)
-    
-    print("\n=== STEP 2: BUILD DATASET PIPELINE ===")
-    output_csv = os.path.join(PROCESSED_DATA_DIR, "iu_xray_dataset_raw.csv")
-    actual_xml_dir = os.path.join(reports_unzip_dir, "ecgen-radiology")
-    parse_xml_to_csv(actual_xml_dir, images_unzip_dir, projections_csv, output_csv)
+    try:
+        download_file(REPORTS_URL, reports_tgz)
+        extract_tgz(reports_tgz, reports_unzip_dir)
+        
+        download_file(IMAGES_URL, images_tgz)
+        extract_tgz(images_tgz, images_unzip_dir)
+        
+        # Tải thêm file metadata projection
+        download_file(PROJECTIONS_URL, projections_csv)
+        
+        print("\n=== STEP 2: BUILD DATASET PIPELINE ===")
+        actual_xml_dir = os.path.join(reports_unzip_dir, "ecgen-radiology")
+        parse_xml_to_csv(actual_xml_dir, images_unzip_dir, projections_csv, output_csv)
+    except Exception as e:
+        print(f"❌ Failed to prepare dataset from scratch: {e}")
+        print("Tip: If you are on Kaggle, please 'Add Data' the 'chest-xrays-indiana-university' dataset.")
