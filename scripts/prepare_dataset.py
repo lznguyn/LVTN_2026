@@ -217,15 +217,27 @@ if __name__ == "__main__":
     
     output_csv = os.path.join(PROCESSED_DATA_DIR, "iu_xray_dataset_raw.csv")
 
-    # --- KIỂM TRA MÔI TRƯỜNG KAGGLE ---
-    KAGGLE_INPUT_DIR = "/kaggle/input/chest-xrays-indiana-university"
+    # --- TỰ ĐỘNG TÌM KIẾM DỮ LIỆU KAGGLE ---
+    kaggle_base = "/kaggle/input"
+    detected_kaggle_dir = None
     
-    if os.path.exists(KAGGLE_INPUT_DIR):
-        success = parse_kaggle_to_csv(KAGGLE_INPUT_DIR, output_csv)
+    if os.path.exists(kaggle_base):
+        print(f"🔍 Đang quét dữ liệu trong {kaggle_base}...")
+        # Quét các thư mục trong /kaggle/input để tìm file indiana_reports.csv
+        for root_dir, dirs, files in os.walk(kaggle_base):
+            if "indiana_reports.csv" in files:
+                detected_kaggle_dir = root_dir
+                print(f"✨ Tìm thấy dữ liệu tại: {detected_kaggle_dir}")
+                break
+    
+    if detected_kaggle_dir:
+        success = parse_kaggle_to_csv(detected_kaggle_dir, output_csv)
         if success:
-            exit(0) # Kết thúc sớm nếu đã xử lý xong dữ liệu Kaggle
+            exit(0)
         else:
-            print("⚠️ Falling back to manual download...")
+            print("⚠️ Có lỗi khi xử lý dữ liệu Kaggle, đang chuyển sang tải thủ công...")
+    else:
+        print("🔍 Không tìm thấy bộ dữ liệu trong /kaggle/input. Đang chuyển sang tải từ internet...")
 
     # --- THÔNG TIN NGUỒN TẢI (Trường hợp không dùng Kaggle Dataset có sẵn) ---
     # Nguồn: Indiana University Chest X-Rays (Khoảng ~4000 báo cáo và ~7500 bức ảnh)
