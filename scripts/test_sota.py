@@ -114,6 +114,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--checkpoint', type=str, required=True, help="Đường dẫn tới file .pt")
     parser.add_argument('--config', type=str, default='configs/default.yaml')
+    parser.add_argument('--image_dir', type=str, default=None, help="Thư mục chứa ảnh (nếu không truyền, sẽ tự tìm trên Kaggle)")
     args = parser.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -131,8 +132,24 @@ def main():
     image_transform = get_transforms(image_size)
     val_df = pd.read_csv(config['data']['val_csv'])
     
-    print("🛠️ Đang sửa lỗi đường dẫn Windows -> Linux (nếu có)...")
-    val_df['image_path'] = val_df['image_path'].apply(patch_path)
+    print("🛠️ Đang sửa lỗi đường dẫn ảnh...")
+    
+    # Nếu user không cung cấp image_dir, tự tìm trên Kaggle
+    image_dir = args.image_dir
+    if image_dir is None and os.path.exists("/kaggle/input"):
+        # Thử auto-detect từ ảnh đầu tiên trong val_df
+        first_img = val_df['image_path'].iloc[0]
+        first_fname = os.path.basename(str(first_img).replace('\\', '/'))
+        print(f"   🔍 Đang tự tìm thư mục chứa '{first_fname}' trên Kaggle...")
+        for root, _, files in os.walk("/kaggle/input"):
+            if first_fname in files:
+                image_dir = root
+                print(f"   ✅ Tìm thấy tại: {image_dir}")
+                break
+        if image_dir is None:
+            print("   ⚠️  Không tìm thấy tự động. Dùng --image_dir để chỉ rõ thư mục ảnh.")
+    
+    val_df['image_path'] = val_df['image_path'].apply(lambda p: patch_path(p, image_dir))
 
     val_loader = DataLoader(MedicalImageTextDataset(val_df, image_transform, tokenizer), batch_size=16, shuffle=False)
 
