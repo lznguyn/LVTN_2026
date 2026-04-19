@@ -84,9 +84,24 @@ def remap_sota_state_dict(state_dict):
     return new_sd
 
 
-def patch_path(p):
+def patch_path(p, image_dir=None):
     if not isinstance(p, str): return p
     p = p.replace('\\', '/')
+    filename = os.path.basename(p)
+    
+    # Nếu người dùng cung cấp thư mục ảnh cụ thể, ưu tiên dùng nó
+    if image_dir:
+        candidate = os.path.join(image_dir, filename)
+        if os.path.exists(candidate):
+            return candidate
+    
+    # Thử tìm trong các thư mục phổ biến trên Kaggle
+    for search_root in ["/kaggle/input", "/kaggle/working"]:
+        for root, _, files in os.walk(search_root):
+            if filename in files:
+                return os.path.join(root, filename)
+    
+    # Fallback: giữ nguyên relative path (cho môi trường local)
     if 'data/raw/images/' in p:
         return 'data/raw/images/' + p.split('data/raw/images/')[-1]
     return p
