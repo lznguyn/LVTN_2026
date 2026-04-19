@@ -135,18 +135,54 @@ def main():
         if not first_key.startswith("image_encoder.model."):
             print("   🔄 Đang dịch key từ HuggingFace format -> timm format...")
             state_dict = remap_sota_state_dict(state_dict)
+
+        # --- TỰ ĐỘNG ĐỌC KÍCH THƯỚC TỪ CHECKPOINT ---
+        # Tránh lỗi size mismatch do SOTA dùng hidden_dim khác
+        img_proj_w = state_dict.get("image_proj.mlp.0.weight")
+        txt_proj_w = state_dict.get("text_proj.mlp.0.weight")
+        if img_proj_w is not None:
+            img_hidden_dim = img_proj_w.shape[0]   # [hidden, input]
+            img_input_dim  = img_proj_w.shape[1]
+            print(f"   📐 Tự động nhận diện Image Proj: input={img_input_dim}, hidden={img_hidden_dim}")
+        else:
+            img_hidden_dim = 2048
+            img_input_dim  = 1024
         
+        if txt_proj_w is not None:
+            txt_hidden_dim = txt_proj_w.shape[0]
+            txt_input_dim  = txt_proj_w.shape[1]
+            print(f"   📐 Tự động nhận diện Text  Proj: input={txt_input_dim}, hidden={txt_hidden_dim}")
+        else:
+            txt_hidden_dim = 2048
+
+        # Determine embed_dim from the last layer of image_proj
+        last_proj_w = state_dict.get("image_proj.mlp.3.weight")
+        embed_dim = last_proj_w.shape[0] if last_proj_w is not None else 512
+        print(f"   📐 Embed dim = {embed_dim}")
+
+        # Build model với đúng embed_dim từ checkpoint
+        from src.models.projection import ProjectionHead
+        model = MultimodalModel(image_encoder_name=img_enc_name,
+                                text_model_name=text_enc_name,
+                                embed_dim=embed_dim).to(device)
+        # Override projection heads với đúng hidden_dim
+        model.image_proj = ProjectionHead(img_input_dim, embed_dim, img_hidden_dim).to(device)
+        model.text_proj  = ProjectionHead(txt_input_dim, embed_dim, txt_hidden_dim).to(device)
+        # ------------------------------------------------
+
         state_dict = fix_state_dict(state_dict, model.state_dict().keys())
         msg = model.load_state_dict(state_dict, strict=False)
         
         n_missing = len(msg.missing_keys)
         n_unexpected = len(msg.unexpected_keys)
         print(f"✨ Nạp model xong! Missing: {n_missing} | Unexpected: {n_unexpected}")
-        if n_missing > 50:
-            print(f"   ⚠️  Cảnh báo: Quá nhiều key bị thiếu ({n_missing}). "
-                  f"File SOTA có thể được train với kiến trúc hoàn toàn khác.")
+        if n_missing > 20:
+            print(f"   ⚠️  Cảnh báo: Vẫn còn {n_missing} key bị thiếu.")
+            print(f"   Missing (5 đầu): {msg.missing_keys[:5]}")
     except Exception as e:
+        import traceback
         print(f"❌ Lỗi khi nạp weights: {e}")
+        traceback.print_exc()
         return
 
     print("\n🔍 Bắt đầu chạy test case...")
