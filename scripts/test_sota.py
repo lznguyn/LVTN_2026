@@ -171,14 +171,40 @@ def main():
         # ------------------------------------------------
 
         state_dict = fix_state_dict(state_dict, model.state_dict().keys())
-        msg = model.load_state_dict(state_dict, strict=False)
         
+        # --- LỌC BỎ KEY BỊ LỖII KÍCH THƯỚC TRƯỚC KHI LOAD ---
+        model_sd = model.state_dict()
+        filtered_sd = {}
+        skipped_size = []
+        for k, v in state_dict.items():
+            if k in model_sd:
+                if v.shape == model_sd[k].shape:
+                    filtered_sd[k] = v
+                else:
+                    skipped_size.append(f"{k}: checkpoint{list(v.shape)} vs model{list(model_sd[k].shape)}")
+            # key không tồn tại trong model -> để strict=False xử lý
+        
+        if skipped_size:
+            print(f"\n   ⚠️  Bỏ qua {len(skipped_size)} keys bị lỗi kích thước:")
+            for s in skipped_size[:5]:
+                print(f"      - {s}")
+            if len(skipped_size) > 5:
+                print(f"      ... và {len(skipped_size)-5} keys khác")
+        # -------------------------------------------------------
+
+        msg = model.load_state_dict(filtered_sd, strict=False)
+        
+        n_loaded = len(filtered_sd)
+        n_total = len(model_sd)
         n_missing = len(msg.missing_keys)
-        n_unexpected = len(msg.unexpected_keys)
-        print(f"✨ Nạp model xong! Missing: {n_missing} | Unexpected: {n_unexpected}")
-        if n_missing > 20:
-            print(f"   ⚠️  Cảnh báo: Vẫn còn {n_missing} key bị thiếu.")
-            print(f"   Missing (5 đầu): {msg.missing_keys[:5]}")
+        print(f"\n✨ Nạp model xong! Loaded: {n_loaded}/{n_total} keys | Missing: {n_missing}")
+        
+        if n_missing > n_total * 0.5:
+            print(f"   🚨 CẢNH BÁO NGHIÊM TRỌNG: >50% keys bị thiếu!")
+            print(f"   File SOTA được train với kiến trúc KHÁC HOÀN TOÀN với code hiện tại.")
+            print(f"   Kết quả evaluate sẽ KHÔNG CÓ Ý NGHĨA (model đang dùng weights ngẫu nhiên).")
+        elif n_missing > 30:
+            print(f"   ⚠️  Cảnh báo: {n_missing} keys bị thiếu, sẽ dùng weights mặc định (random init).")
     except Exception as e:
         import traceback
         print(f"❌ Lỗi khi nạp weights: {e}")
