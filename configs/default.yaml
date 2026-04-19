@@ -15,8 +15,9 @@ training:
   batch_size: 32             # <--- Giảm xuống 32 (16 ảnh / 1 GPU) để chống OOM
   gradient_accumulation_steps: 8  # <--- Tổng batch thực tế = 32 * 4 = 128
   epochs: 100
-  lr: 0.0001                 # <--- Tăng nhẹ Projector LR lên 1e-4
-  warmup_epochs: 3            # <--- Kéo dài warmup thêm 1 chút
+  lr: 0.00005                 # <--- Giảm xuống 5e-5 để học chậm và kỹ hơn
+  warmup_epochs: 5            # <--- Kéo dài warmup lên 5 epoch để khởi đầu nhẹ nhàng
+  backbone_lr_ratio: 10       # <--- Chia 10 cho Backbone để bảo vệ pre-trained weights
   weight_decay: 0.05          # <--- GIẢM MẠNH: 0.3 là quá cao, gây cản trở ranh giới quyết định
   num_workers: 4
   max_steps_per_epoch: null  # <--- Học hết toàn bộ tập dữ liệu mỗi epoch

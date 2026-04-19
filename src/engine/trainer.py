@@ -18,7 +18,9 @@ class MultimodalTrainer:
         # --- TỐI ƯU: Discriminative Learning Rate (Tốc độ học phân biệt) ---
         # Ngăn việc training quá mạnh làm hỏng kiến thức của Pre-trained backbones
         lr_projector = float(config['training']['lr'])
-        lr_backbone = lr_projector / 8.0 # Nâng LR backbone lên (~1.25e-5)
+        # Mặc định là chia 10.0 (chậm hơn) nếu không khai báo trong config
+        backbone_ratio = float(config['training'].get('backbone_lr_ratio', 10.0))
+        lr_backbone = lr_projector / backbone_ratio
         
         # Xử lý tương thích với lớp bọc nn.DataParallel 
         model_module = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
