@@ -14,6 +14,76 @@ from src.models.multimodal import MultimodalModel
 from src.data.dataset import MedicalImageTextDataset
 from scripts.evaluate import evaluate_retrieval, fix_state_dict, get_transforms
 
+def remap_sota_state_dict(state_dict):
+    """
+    Dịch key của file SOTA (HuggingFace style) sang cấu trúc MultimodalModel (timm style).
+    
+    Mapping chính:
+      image_encoder.embeddings.*         -> image_encoder.model.patch_embed.*
+      image_encoder.encoder.layers.*     -> image_encoder.model.layers.*
+      image_encoder.layernorm.*          -> image_encoder.model.norm.*
+      text_encoder.embeddings.*          -> text_encoder.model.embeddings.*
+      text_encoder.encoder.*             -> text_encoder.model.encoder.*
+      text_encoder.pooler.*              -> text_encoder.model.pooler.*
+      img_proj.proj.*                    -> image_proj.mlp.*
+      txt_proj.proj.*                    -> text_proj.mlp.*
+    """
+    new_sd = {}
+    skipped = []
+    for k, v in state_dict.items():
+        nk = k
+
+        # === IMAGE ENCODER ===
+        if nk.startswith("image_encoder.embeddings.patch_embeddings.projection."):
+            nk = nk.replace("image_encoder.embeddings.patch_embeddings.projection.",
+                             "image_encoder.model.patch_embed.proj.")
+        elif nk.startswith("image_encoder.embeddings.norm."):
+            nk = nk.replace("image_encoder.embeddings.norm.",
+                             "image_encoder.model.patch_embed.norm.")
+        elif nk.startswith("image_encoder.layernorm."):
+            nk = nk.replace("image_encoder.layernorm.",
+                             "image_encoder.model.norm.")
+        elif nk.startswith("image_encoder.encoder.layers."):
+            # Phức tạp: dịch từ HF attention style -> timm attn style
+            nk = nk.replace("image_encoder.encoder.layers.", "image_encoder.model.layers.")
+            nk = nk.replace(".attention.self.logit_scale", ".attn.logit_scale")
+            nk = nk.replace(".attention.self.continuous_position_bias_mlp.", ".attn.cpb_mlp.")
+            nk = nk.replace(".attention.self.query.", ".attn.q_bias_")   # placeholder
+            nk = nk.replace(".attention.self.key.", ".attn.qkv_k_")      # placeholder
+            nk = nk.replace(".attention.self.value.", ".attn.v_bias_")   # placeholder
+            nk = nk.replace(".attention.output.dense.", ".attn.proj.")
+            nk = nk.replace(".layernorm_before.", ".norm1.")
+            nk = nk.replace(".layernorm_after.", ".norm2.")
+            nk = nk.replace(".intermediate.dense.", ".mlp.fc1.")
+            nk = nk.replace(".output.dense.", ".mlp.fc2.")
+            nk = nk.replace(".downsample.", ".downsample.")
+
+        # === TEXT ENCODER ===
+        elif nk.startswith("text_encoder.embeddings."):
+            nk = nk.replace("text_encoder.embeddings.", "text_encoder.model.embeddings.")
+        elif nk.startswith("text_encoder.encoder."):
+            nk = nk.replace("text_encoder.encoder.", "text_encoder.model.encoder.")
+        elif nk.startswith("text_encoder.pooler."):
+            nk = nk.replace("text_encoder.pooler.", "text_encoder.model.pooler.")
+
+        # === PROJECTION HEADS ===
+        elif nk.startswith("img_proj.proj."):
+            nk = nk.replace("img_proj.proj.", "image_proj.mlp.")
+        elif nk.startswith("txt_proj.proj."):
+            nk = nk.replace("txt_proj.proj.", "text_proj.mlp.")
+
+        # Bỏ qua logit_scale (không có trong MultimodalModel)
+        elif nk == "logit_scale":
+            skipped.append(k)
+            continue
+
+        new_sd[nk] = v
+
+    if skipped:
+        print(f"   ℹ️  Bỏ qua {len(skipped)} keys không tương thích: {skipped[:3]}...")
+    return new_sd
+
+
 def patch_path(p):
     if not isinstance(p, str): return p
     p = p.replace('\\', '/')
@@ -59,10 +129,22 @@ def main():
         state_dict = torch.load(args.checkpoint, map_location=device)
         if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
             state_dict = state_dict['model_state_dict']
-            
+        
+        # Tự động nhận diện và dịch key từ kiến trúc SOTA -> MultimodalModel
+        first_key = next(iter(state_dict.keys()))
+        if not first_key.startswith("image_encoder.model."):
+            print("   🔄 Đang dịch key từ HuggingFace format -> timm format...")
+            state_dict = remap_sota_state_dict(state_dict)
+        
         state_dict = fix_state_dict(state_dict, model.state_dict().keys())
-        msg = model.load_state_dict(state_dict, strict=True)
-        print("✨ Nạp model thành công!")
+        msg = model.load_state_dict(state_dict, strict=False)
+        
+        n_missing = len(msg.missing_keys)
+        n_unexpected = len(msg.unexpected_keys)
+        print(f"✨ Nạp model xong! Missing: {n_missing} | Unexpected: {n_unexpected}")
+        if n_missing > 50:
+            print(f"   ⚠️  Cảnh báo: Quá nhiều key bị thiếu ({n_missing}). "
+                  f"File SOTA có thể được train với kiến trúc hoàn toàn khác.")
     except Exception as e:
         print(f"❌ Lỗi khi nạp weights: {e}")
         return
