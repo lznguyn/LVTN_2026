@@ -209,6 +209,8 @@ def main():
     parser.add_argument('--checkpoint', type=str)
     parser.add_argument('--config', type=str, default='configs/default.yaml')
     parser.add_argument('--output', type=str, default='data/evaluation_summary.csv')
+    parser.add_argument('--image_size', type=int, help='Override image size (e.g. 384)')
+    parser.add_argument('--image_encoder', type=str, help='Override image encoder name (e.g. swinv2_base_window12_384)')
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -216,7 +218,15 @@ def main():
     
     # Resources
     tokenizer = AutoTokenizer.from_pretrained(config['model']['text_encoder'])
-    image_transform = get_transforms(config['data']['image_size'])
+    
+    # [CUSTOM] Tự động nhận diện size 384 từ tên file nếu không truyền tham số
+    image_size = args.image_size
+    if image_size is None and args.checkpoint and "384" in args.checkpoint:
+        image_size = 384
+        print(f"✨ Tự động nhận diện Image Size = {image_size} từ tên file.")
+    
+    image_size = image_size if image_size else config['data']['image_size']
+    image_transform = get_transforms(image_size)
     val_df = pd.read_csv(config['data']['val_csv'])
     
     # --- VÁ LỖI ĐƯỜNG DẪN WINDOWS TUYỆT ĐỐI ---
@@ -277,11 +287,20 @@ def main():
                 type_str = "Agent (Acc)"
             else:
                 if model_retrieval is None:
-                    model_retrieval = MultimodalModel(config['model']['image_encoder'], config['model']['text_encoder']).to(device)
+                    # [CUSTOM] Ghi đè bộ mã hóa ảnh nếu cần (ví dụ bản SOTA dùng base-384)
+                    img_enc_name = args.image_encoder if args.image_encoder else config['model']['image_encoder']
+                    if args.image_encoder is None and "384" in filename:
+                        img_enc_name = "swinv2_base_window12_384"
+                        print(f"   ✨ Tự động gán Image Encoder = {img_enc_name}")
+                        
+                    model_retrieval = MultimodalModel(img_enc_name, config['model']['text_encoder']).to(device)
                 
                 state_dict = fix_state_dict(state_dict, model_retrieval.state_dict().keys())
                 model_retrieval.load_state_dict(state_dict, strict=True)
-                i2t, t2i = evaluate_retrieval(model_retrieval, val_loader, device)
+                model_retrieval.eval()
+                # Đồng bộ DataLoader với Image Size mới
+                val_loader_fixed = DataLoader(MedicalImageTextDataset(val_df, image_transform, tokenizer), batch_size=16, shuffle=False)
+                i2t, t2i = evaluate_retrieval(model_retrieval, val_loader_fixed, device)
                 type_str = "Retrieval"
 
             # Lưu kết quả linh hoạt theo loại model

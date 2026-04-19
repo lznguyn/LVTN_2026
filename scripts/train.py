@@ -3,6 +3,7 @@ import yaml
 import torch
 import pandas as pd
 import numpy as np
+import shutil
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from transformers import AutoTokenizer
@@ -106,7 +107,7 @@ def main():
     trainer = MultimodalTrainer(model, config, device=device)
     
     epochs = config['training']['epochs']
-    best_r1 = 0.0
+    best_r1 = -1.0
 
     # --- TRACKING XU HUONG R@1 (Rolling Average 5 epoch) ---
     # Muc dich: Loai bo nhieu epoch-by-epoch, nhin thay xu huong thuc su
@@ -137,25 +138,43 @@ def main():
             print(f"⚠️ Lỗi khi đánh giá R@1: {e}")
             
         # Lưu checkpoint tốt nhất (lưu weights để suy luận chính xác hơn)
+        is_best = False
         if current_r1 > best_r1:
             best_r1 = current_r1
+            is_best = True
             ckpt_path = os.path.join(config['training']['checkpoint_dir'], "best_model.pth")
             
             # Xuất đúng định dạng Weight dù có dùng DataParallel hay không
             model_module = trainer.model.module if isinstance(trainer.model, torch.nn.DataParallel) else trainer.model
             torch.save(model_module.state_dict(), ckpt_path)
-            
             print(f"⭐ [CÓ CẢI THIỆN R@1 = {best_r1:.2f}%] - Lưu weights vào: {ckpt_path}")
-            
-            # --- TỰ ĐỘNG BACKUP VÀO BÊN TRONG GOOGLE DRIVE ---
-            drive_dir = "/content/drive/MyDrive/Multimodal_Checkpoints"
-            if os.path.exists("/content/drive/MyDrive"):
-                import shutil
+
+        # --- LUÔN LƯU LAST MODEL ĐỂ DỰ PHÒNG ---
+        last_ckpt_path = os.path.join(config['training']['checkpoint_dir'], "last_model.pth")
+        model_module = trainer.model.module if isinstance(trainer.model, torch.nn.DataParallel) else trainer.model
+        torch.save(model_module.state_dict(), last_ckpt_path)
+
+        # --- TỰ ĐỘNG BACKUP VÀO BÊN TRONG GOOGLE DRIVE (CHO COLAB) ---
+        drive_roots = ["/content/drive/MyDrive", "/content/drive/My Drive"]
+        for root in drive_roots:
+            if os.path.exists(root):
+                drive_dir = os.path.join(root, "Multimodal_Checkpoints")
                 os.makedirs(drive_dir, exist_ok=True)
-                drive_path = os.path.join(drive_dir, "best_model.pth")
-                shutil.copy(ckpt_path, drive_path)
-                print(f"✅ Đã backup file best_model.pth an toàn vào Google Drive: {drive_path}")
-            # ---------------------------------------------------
+                
+                # Backup bản best
+                if is_best:
+                    shutil.copy(ckpt_path, os.path.join(drive_dir, "best_model.pth"))
+                    print(f"✅ Đã backup best_model.pth vào Drive: {drive_dir}")
+                
+                # Backup bản last
+                shutil.copy(last_ckpt_path, os.path.join(drive_dir, "last_model.pth"))
+                break
+
+        # --- LƯU Ý CHO KAGGLE ---
+        if os.path.exists("/kaggle/working"):
+            # Trên Kaggle, mọi thứ trong /kaggle/working sẽ được lưu khi dùng "Save Version"
+            # Ta đã lưu vào checkpoints/ nên không cần copy đi đâu thêm.
+            pass
 
         # --- ROLLING AVERAGE: Xu huong R@1 thuc su ---
         # Tai muc 2-3%, thay doi 0.07% = 1 mau flip -> nhieu thuan tuy
