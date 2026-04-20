@@ -41,40 +41,98 @@ def patch_path(p):
         return prefix + p.split(prefix)[-1]
     return p
 
-def plot_tsne(img_embeds, txt_embeds, clusters, output_path="results/tsne_clusters.png", lang='vi'):
-    """Vẽ biểu đồ t-SNE phân cụm"""
-    print("🚀 Đang chạy t-SNE (có thể mất vài phút)...")
+def get_cluster_keywords(df, cluster_id, top_n=3):
+    """Trích xuất từ khóa bệnh lý tiêu biểu cho mỗi cụm"""
+    from collections import Counter
+    import re
     
-    # Gộp ảnh và văn bản để xem tương quan (Optional)
-    # Ở đây chúng ta chỉ vẽ văn bản trước để thấy cấu trúc bệnh lý
+    # Danh sách stop-words y tế và tiếng Anh cơ bản
+    stops = {
+        'the', 'and', 'with', 'is', 'no', 'of', 'for', 'was', 'were', 'within', 'are', 'identified', 
+        'seen', 'shown', 'appear', 'there', 'from', 'this', 'that', 'these', 'those', 'normal',
+        'acute', 'finding', 'findings', 'patient', 'chest', 'lungs', 'pleural', 'heart', 'clear'
+    }
+    
+    text = " ".join(df[df['cluster_id'] == cluster_id]['report'].astype(str).tolist()).lower()
+    words = re.findall(r'\b[a-z]{4,}\b', text) # Chỉ lấy từ 4 chữ cái trở lên
+    words = [w for w in words if w not in stops]
+    
+    most_common = [w[0].capitalize() for w in Counter(words).most_common(top_n)]
+    return " & ".join(most_common) if most_common else f"Cluster {cluster_id}"
+
+def plot_tsne(img_embeds, txt_embeds, clusters, df=None, output_path="results/tsne_labeled.png", lang='vi'):
+    """Vẽ biểu đồ t-SNE phân cụm với nhãn bệnh lý tự động"""
+    print("🚀 Đang chạy t-SNE và trích xuất nhãn bệnh lý...")
+    
     X = txt_embeds.numpy()
-    
     tsne = TSNE(n_components=2, random_state=42, perplexity=30)
     X_2d = tsne.fit_transform(X)
     
-    plt.figure(figsize=(12, 10))
+    plt.figure(figsize=(14, 11))
     sns.set_style("whitegrid")
     
-    # Lọc bỏ cluster -1 (nhiễu)
     valid_idx = clusters != -1
     X_plot = X_2d[valid_idx]
     c_plot = clusters[valid_idx]
     
-    scatter = plt.scatter(X_plot[:, 0], X_plot[:, 1], c=c_plot, cmap='tab20', alpha=0.6, s=15)
-    plt.colorbar(scatter, label='Cluster ID')
+    # Lấy danh sách các cụm duy nhất (loại bỏ -1)
+    unique_clusters = sorted(np.unique(c_plot))
     
-    title = "Phân cụm không gian đặc trưng (t-SNE)" if lang == 'vi' else "Feature Space Clustering (t-SNE)"
-    xlabel = "Chiều t-SNE 1" if lang == 'vi' else "t-SNE Dimension 1"
-    ylabel = "Chiều t-SNE 2" if lang == 'vi' else "t-SNE Dimension 2"
+    # Tạo bảng màu
+    colors = plt.cm.get_cmap('tab20')(np.linspace(0, 1, len(unique_clusters)))
     
-    plt.title(title, fontsize=16, fontweight='bold')
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
+    for i, cluster_id in enumerate(unique_clusters):
+        mask = c_plot == cluster_id
+        cluster_name = get_cluster_keywords(df, cluster_id) if df is not None else f"Cluster {cluster_id}"
+        
+        plt.scatter(X_plot[mask, 0], X_plot[mask, 1], label=cluster_name, alpha=0.6, s=25)
+        
+        # Thêm Annotation tại vị trí trung tâm cụm (Centroid)
+        centroid = X_plot[mask].mean(axis=0)
+        plt.annotate(cluster_name, centroid, fontsize=9, fontweight='bold', 
+                     bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+    
+    title = "Phân biệt không gian đặc trưng theo Bệnh lý (t-SNE)" if lang == 'vi' else "Pathology-aware Feature Space (t-SNE)"
+    plt.title(title, fontsize=18, fontweight='bold', pad=20)
+    plt.legend(title="Nhóm bệnh lý (Auto-labeled)", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
     
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"✅ Biểu đồ t-SNE đã được lưu tại: {output_path}")
+    print(f"✅ Biểu đồ t-SNE gán nhãn đã được lưu tại: {output_path}")
+
+def plot_joint_tsne(img_embeds, txt_embeds, clusters, output_path="results/joint_space.png", lang='vi'):
+    """Vẽ biểu đồ Joint Space (Ảnh + Văn bản) để xem độ Alignment"""
+    print("🚀 Đang chạy Joint t-SNE (Ảnh + Văn bản)...")
+    
+    # Gộp cả image và text embeddings
+    # Dùng 1000 mẫu đầu tiên để biểu đồ không quá bị nhiễu
+    N = min(500, len(img_embeds))
+    X = torch.cat([img_embeds[:N], txt_embeds[:N]], dim=0).numpy()
+    
+    tsne = TSNE(n_components=2, random_state=42, perplexity=30)
+    X_2d = tsne.fit_transform(X)
+    
+    X_img = X_2d[:N]
+    X_txt = X_2d[N:]
+    c_plot = clusters[:N]
+    
+    plt.figure(figsize=(12, 10))
+    sns.set_style("whitegrid")
+    
+    # Vẽ các đường nối giữa Ảnh và Văn bản của cùng một bệnh nhân (Alignment)
+    for i in range(N):
+        plt.plot([X_img[i, 0], X_txt[i, 0]], [X_img[i, 1], X_txt[i, 1]], 'gray', alpha=0.1, linewidth=0.5)
+    
+    plt.scatter(X_img[:, 0], X_img[:, 1], c=c_plot, marker='o', s=30, alpha=0.7, label='Image Embeds', cmap='tab20')
+    plt.scatter(X_txt[:, 0], X_txt[:, 1], c=c_plot, marker='^', s=40, alpha=0.8, label='Text Embeds', cmap='tab20')
+    
+    plt.title("Sự căn chỉnh không gian đa phương thức (Joint Alignment)", fontsize=16, fontweight='bold')
+    plt.legend()
+    
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"✅ Biểu đồ Joint Space đã được lưu tại: {output_path}")
 
 def plot_retrieval_samples(model, dataloader, device, output_dir="results/retrieval_samples", num_samples=5, lang='vi'):
     """Vẽ demo truy xuất thực tế"""
@@ -193,7 +251,9 @@ def main():
     # 3. Thực hiện trực quan hóa
     if args.mode in ['tsne', 'all']:
         img_embeds, txt_embeds, clusters = evaluate_retrieval(model, val_loader, device, return_embeds=True)
-        plot_tsne(img_embeds, txt_embeds, clusters, lang=args.lang)
+        plot_tsne(img_embeds, txt_embeds, clusters, df=val_df, lang=args.lang)
+        # Tự động vẽ thêm biểu đồ Joint Space nếu ở chế độ all hoặc yêu cầu riêng
+        plot_joint_tsne(img_embeds, txt_embeds, clusters, lang=args.lang)
         
     if args.mode in ['retrieval', 'all']:
         plot_retrieval_samples(model, val_loader, device, num_samples=5, lang=args.lang)
