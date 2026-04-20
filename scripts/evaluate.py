@@ -73,7 +73,7 @@ def get_ground_truth_action(report, templates):
     return 0 # Generate
 
 @torch.no_grad()
-def evaluate_retrieval(model, dataloader, device):
+def evaluate_retrieval(model, dataloader, device, return_embeds=False):
     """Đánh giá R@K cho MultimodalModel (Stage 1) - Hỗ trợ Semantic Cluster Match"""
     model.eval()
     all_img_embeds = []
@@ -98,6 +98,10 @@ def evaluate_retrieval(model, dataloader, device):
     # Gộp tất cả các cluster của dataset lại
     clusters = torch.cat(all_clusters, dim=0) if all_clusters else None
     
+    # Nếu chỉ cần lấy embeddings để vẽ biểu đồ (t-SNE)
+    if return_embeds:
+        return img_embeds, txt_embeds, clusters
+
     # [1] Tính R@K theo chuẩn Strict (phải khớp chính xác Patient ID)
     r_strict = calculate_recall_chunked(img_embeds, txt_embeds, device, clusters=None)
     

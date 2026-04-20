@@ -129,8 +129,11 @@ def main():
     # Tao thu muc chua tep file .pth Weights cuoi cung
     os.makedirs(config['training']['checkpoint_dir'], exist_ok=True)
     
+    history = []
+    history_path = os.path.join(config['training']['checkpoint_dir'], "training_history.csv")
+
     for epoch in range(1, epochs + 1):
-        trainer.train_epoch(train_loader, epoch)
+        train_loss = trainer.train_epoch(train_loader, epoch)
         val_loss = trainer.validate(val_loader, epoch)
         
         # --- ĐÁNH GIÁ R@1 SAU MỖI EPOCH ---
@@ -142,6 +145,19 @@ def main():
             
             print(f"✅ Epoch {epoch} [Strict]  - R@1: {r_strict[0]:.2f}% | R@5: {r_strict[1]:.2f}%")
             print(f"✅ Epoch {epoch} [Cluster] - R@1: {r_cluster[0]:.2f}% | R@5: {r_cluster[1]:.2f}% | R@10: {r_cluster[2]:.2f}%")
+            
+            # --- LƯU NHẬT KÝ (LOGGING) ---
+            history.append({
+                'epoch': epoch,
+                'train_loss': train_loss,
+                'val_loss': val_loss,
+                'r1_strict': r_strict[0],
+                'r5_strict': r_strict[1],
+                'r1_cluster': r_cluster[0],
+                'r5_cluster': r_cluster[1],
+                'r10_cluster': r_cluster[2]
+            })
+            pd.DataFrame(history).to_csv(history_path, index=False)
             
             current_r1 = r_cluster[0]
         except Exception as e:
