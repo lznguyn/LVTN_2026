@@ -12,6 +12,7 @@ from transformers import AutoTokenizer
 from sklearn.manifold import TSNE
 import argparse
 import yaml
+from PIL import Image
 
 # Gắn thư mục gốc vào đường dẫn hệ thống để gọi các modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -144,7 +145,6 @@ def plot_comparative_t2i(config, ckpt_a, ckpt_b, query_text, val_loader, device,
         # Khởi tạo model
         model = MultimodalModel(config['model']['image_encoder'], config['model']['text_encoder']).to(device)
         
-        # Nếu có ckpt_path thì mới nạp weights, nếu không sẽ là Untrained Baseline
         if ckpt_path:
             sd = torch.load(ckpt_path, map_location=device)
             if 'model_state_dict' in sd: sd = sd['model_state_dict']
@@ -159,42 +159,47 @@ def plot_comparative_t2i(config, ckpt_a, ckpt_b, query_text, val_loader, device,
         # 1. Encode Query Text
         inputs = tokenizer(query_str, return_tensors='pt', padding=True, truncation=True, max_length=128).to(device)
         with torch.no_grad():
-            # Gọi trực tiếp qua encoder và projector để tránh gọi forward() bị thiếu tham số
             query_features = model.text_encoder(inputs['input_ids'], inputs['attention_mask'])
             query_embed = model.text_proj(query_features)
             query_embed = torch.nn.functional.normalize(query_embed, dim=-1)
             
-        # 2. Encode Images
+        # 2. Encode Images (Lưu đường dẫn thay vì lưu toàn bộ mảng ảnh để tránh OOM)
         all_img_embeds = []
-        all_images_raw = []
+        all_img_paths = loader.dataset.df['image_path'].tolist()
+        
         desc = f"Encoding images ({os.path.basename(ckpt_path) if ckpt_path else 'Untrained'})"
         with torch.no_grad():
             for batch in tqdm(loader, desc=desc, leave=False):
                 imgs = batch['image'].to(device)
-                
-                # Gọi trực tiếp qua encoder và projector ảnh
                 img_features = model.image_encoder(imgs)
                 img_embeds = model.image_proj(img_features)
                 img_embeds = torch.nn.functional.normalize(img_embeds, dim=-1)
-                
                 all_img_embeds.append(img_embeds.cpu())
-                
-                if len(all_images_raw) < 100: 
-                    inv_norm = transforms.Normalize(mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225], std=[1/0.229, 1/0.224, 1/0.225])
-                    for j in range(imgs.size(0)):
-                        all_images_raw.append(inv_norm(imgs[j].cpu()).clamp(0, 1).permute(1, 2, 0).numpy())
                         
         img_embeds = torch.cat(all_img_embeds, dim=0)
         sims = torch.matmul(query_embed.cpu(), img_embeds.t()) 
         top_vals, top_idx = torch.topk(sims[0], k)
         
-        return top_idx.tolist(), top_vals.tolist(), all_images_raw
+        # 3. Chỉ nạp và xử lý Top-K ảnh đề hiển thị
+        inv_norm = transforms.Compose([
+            transforms.Resize((config['data']['image_size'], config['data']['image_size'])),
+            transforms.ToTensor() # Để dễ xử lý dạng tensor trước khi hiển thị
+        ])
+        
+        top_images = []
+        for idx in top_idx.tolist():
+            img_path = all_img_paths[idx]
+            # Nạp ảnh gốc và resize
+            raw_img = Image.open(img_path).convert('RGB')
+            top_images.append(np.array(raw_img.resize((512, 512))))
+            
+        return top_images, top_vals.tolist()
 
     # Lấy kết quả cho 2 model
-    idx_a, vals_a, imgs_raw = get_top_k_for_model(ckpt_a, query_text, val_loader)
-    idx_b, vals_b, _        = get_top_k_for_model(ckpt_b, query_text, val_loader)
+    imgs_a, vals_a = get_top_k_for_model(ckpt_a, query_text, val_loader)
+    imgs_b, vals_b = get_top_k_for_model(ckpt_b, query_text, val_loader)
     
-    # 3. Vẽ biểu đồ so sánh
+    # 4. Vẽ biểu đồ so sánh
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     ckpt_a_name = os.path.basename(ckpt_a) if ckpt_a else "Untrained Baseline"
     ckpt_b_name = os.path.basename(ckpt_b) if ckpt_b else "SOTA"
@@ -202,16 +207,16 @@ def plot_comparative_t2i(config, ckpt_a, ckpt_b, query_text, val_loader, device,
     plt.suptitle(f"Query: \"{query_text}\"\n(Comparative Inference: {ckpt_a_name} vs {ckpt_b_name})", 
                  fontsize=16, fontweight='bold')
     
-    labels = [ckpt_a_name, ckpt_b_name]
-    all_indices = [idx_a, idx_b]
+    all_imgs = [imgs_a, imgs_b]
     all_values = [vals_a, vals_b]
+    labels = [ckpt_a_name, ckpt_b_name]
     
     for row in range(2):
         for col in range(3):
-            idx = all_indices[row][col]
             sim = all_values[row][col]
+            img = all_imgs[row][col]
             
-            axes[row, col].imshow(imgs_raw[idx])
+            axes[row, col].imshow(img)
             axes[row, col].set_title(f"{labels[row]} - Rank {col+1}\nSim: {sim:.3f}", fontsize=12)
             axes[row, col].axis('off')
             
