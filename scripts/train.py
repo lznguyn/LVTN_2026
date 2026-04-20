@@ -73,19 +73,29 @@ def main():
         train_soft = np.load(os.path.join(processed_dir, "soft_labels_train.npy"))
         val_soft   = np.load(os.path.join(processed_dir, "soft_labels_val.npy"))
         print(f"✅ Đã nạp nhãn mềm GMM: Train {train_soft.shape} | Val {val_soft.shape}")
+        
+        # --- FULL DATASET: Gộp train + val để đánh giá R@K toàn bộ ---
+        full_df   = pd.concat([train_df, val_df], ignore_index=True)
+        full_soft = np.concatenate([train_soft, val_soft], axis=0)
+        print(f"✅ Full Dataset: {len(full_df)} mẫu | Soft Labels {full_soft.shape}")
     except Exception as e:
         print(f"❌ Lỗi khi load dữ liệu: {e}")
         print("💡 Chú ý: Hãy phải chạy Python trên 2 file prepare_dataset.py và create_clusters.py trước!")
         return
 
     train_dataset = MedicalImageTextDataset(train_df, train_transform, tokenizer, config['data']['max_text_length'], soft_labels=train_soft)
-    val_dataset = MedicalImageTextDataset(val_df, val_transform, tokenizer, config['data']['max_text_length'], soft_labels=val_soft)
+    val_dataset   = MedicalImageTextDataset(val_df,   val_transform,   tokenizer, config['data']['max_text_length'], soft_labels=val_soft)
+    
+    # Full dataset (train + val) — không augmentation, dùng cho evaluate_retrieval
+    full_dataset  = MedicalImageTextDataset(full_df,  val_transform,   tokenizer, config['data']['max_text_length'], soft_labels=full_soft)
     
     # Sửa lỗi Threading/Crash của hệ điều hành Windows khi gọi num_workers > 0
     num_workers = 0 if os.name == 'nt' else config['training']['num_workers']
     
-    train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], shuffle=True, num_workers=num_workers)
-    val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'], shuffle=False, num_workers=num_workers)
+    train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], shuffle=True,  num_workers=num_workers)
+    val_loader   = DataLoader(val_dataset,   batch_size=config['training']['batch_size'], shuffle=False, num_workers=num_workers)
+    # Full loader: đánh giá R@K trên toàn bộ dataset → số liệu ổn định, không bị nhỏ
+    full_loader  = DataLoader(full_dataset,  batch_size=config['training']['batch_size'], shuffle=False, num_workers=num_workers)
     
     # 2. GIAI ĐOẠN KHỞI TẠO NEURAL NETWORK
     print("\n[3] 🏗️ Đang xây dựng cấu trúc Mạng Neuron (Swin Transformer V2 + ClinicalBERT + MLP)...")
@@ -127,8 +137,8 @@ def main():
         print(f"\n📊 Đang đánh giá R@1 (Clustering-Guided) cho Epoch {epoch}...")
         current_r1 = 0.0
         try:
-            # [CHÍNH] Đánh giá trực tiếp Raw model (do đã gỡ bỏ EMA để tăng Batch)
-            r_strict, r_cluster = evaluate_retrieval(trainer.model, train_loader, device)
+            # [CHÍNH] Đánh giá trên TOÀN BỘ dataset (train+val) để R@K không bị nhỏ/nhiễu
+            r_strict, r_cluster = evaluate_retrieval(trainer.model, full_loader, device)
             
             print(f"✅ Epoch {epoch} [Strict]  - R@1: {r_strict[0]:.2f}% | R@5: {r_strict[1]:.2f}%")
             print(f"✅ Epoch {epoch} [Cluster] - R@1: {r_cluster[0]:.2f}% | R@5: {r_cluster[1]:.2f}% | R@10: {r_cluster[2]:.2f}%")

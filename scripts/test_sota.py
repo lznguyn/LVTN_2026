@@ -17,7 +17,11 @@ from scripts.evaluate import evaluate_retrieval, fix_state_dict, get_transforms
 def remap_sota_state_dict(state_dict):
     """
     Dịch key của file SOTA (HuggingFace style) sang cấu trúc MultimodalModel (timm style).
-    
+
+    ⚠️  Điểm khó nhất: HuggingFace lưu Q, K, V RIÊNG BIỆT,
+        còn timm SwinV2 gộp chúng thành MỘT matrix `attn.qkv.weight / .bias`.
+        → Ta cần thu thập Q/K/V theo từng block rồi ghép lại sau.
+
     Mapping chính:
       image_encoder.embeddings.*         -> image_encoder.model.patch_embed.*
       image_encoder.encoder.layers.*     -> image_encoder.model.layers.*
@@ -28,8 +32,28 @@ def remap_sota_state_dict(state_dict):
       img_proj.proj.*                    -> image_proj.mlp.*
       txt_proj.proj.*                    -> text_proj.mlp.*
     """
-    new_sd = {}
+    new_sd  = {}
     skipped = []
+
+    # Tạm lưu Q, K, V riêng để merge sau
+    # key = "<attn_prefix>" -> {"q_weight": T, "k_weight": T, "v_weight": T, "q_bias": T, "v_bias": T}
+    qkv_buckets = {}
+
+    def _try_extract_qkv(nk, v, attn_prefix):
+        """
+        Kiểm tra xem nk có phải key Q/K/V không.
+        Nếu có thì lưu vào qkv_buckets và trả về True.
+        """
+        for hf_suffix, slot in [(".attention.self.query.", "q"),
+                                 (".attention.self.key.",   "k"),
+                                 (".attention.self.value.", "v")]:
+            if hf_suffix in nk:
+                param  = nk.split(hf_suffix)[1]   # "weight" hoặc "bias"
+                bucket = qkv_buckets.setdefault(attn_prefix, {})
+                bucket[f"{slot}_{param}"] = v
+                return True
+        return False
+
     for k, v in state_dict.items():
         nk = k
 
@@ -37,26 +61,41 @@ def remap_sota_state_dict(state_dict):
         if nk.startswith("image_encoder.embeddings.patch_embeddings.projection."):
             nk = nk.replace("image_encoder.embeddings.patch_embeddings.projection.",
                              "image_encoder.model.patch_embed.proj.")
+
         elif nk.startswith("image_encoder.embeddings.norm."):
             nk = nk.replace("image_encoder.embeddings.norm.",
                              "image_encoder.model.patch_embed.norm.")
+
         elif nk.startswith("image_encoder.layernorm."):
             nk = nk.replace("image_encoder.layernorm.",
                              "image_encoder.model.norm.")
+
         elif nk.startswith("image_encoder.encoder.layers."):
-            # Phức tạp: dịch từ HF attention style -> timm attn style
             nk = nk.replace("image_encoder.encoder.layers.", "image_encoder.model.layers.")
-            nk = nk.replace(".attention.self.logit_scale", ".attn.logit_scale")
-            nk = nk.replace(".attention.self.continuous_position_bias_mlp.", ".attn.cpb_mlp.")
-            nk = nk.replace(".attention.self.query.", ".attn.q_bias_")   # placeholder
-            nk = nk.replace(".attention.self.key.", ".attn.qkv_k_")      # placeholder
-            nk = nk.replace(".attention.self.value.", ".attn.v_bias_")   # placeholder
+
+            # cpb_mlp & logit_scale (dịch trực tiếp, không cần merge)
+            nk = nk.replace(".attention.self.logit_scale",
+                             ".attn.logit_scale")
+            nk = nk.replace(".attention.self.continuous_position_bias_mlp.",
+                             ".attn.cpb_mlp.")
+
+            # Xử lý Q / K / V → tạm lưu để merge thành qkv
+            # Ví dụ: "image_encoder.model.layers.0.blocks.0.attention.self.query.weight"
+            # attn_prefix = "image_encoder.model.layers.0.blocks.0.attn"
+            if ".attention.self." in nk and ".attention.self.logit_scale" not in nk \
+                    and ".attention.self.continuous_position_bias_mlp." not in nk:
+                base = nk.split(".attention.self.")[0]
+                attn_prefix = base + ".attn"
+                if _try_extract_qkv(nk, v, attn_prefix):
+                    continue
+
+            # --- Tất cả phần còn lại của block ---
             nk = nk.replace(".attention.output.dense.", ".attn.proj.")
             nk = nk.replace(".layernorm_before.", ".norm1.")
-            nk = nk.replace(".layernorm_after.", ".norm2.")
+            nk = nk.replace(".layernorm_after.",  ".norm2.")
             nk = nk.replace(".intermediate.dense.", ".mlp.fc1.")
-            nk = nk.replace(".output.dense.", ".mlp.fc2.")
-            nk = nk.replace(".downsample.", ".downsample.")
+            nk = nk.replace(".output.dense.",       ".mlp.fc2.")
+            # .downsample.* giữ nguyên
 
         # === TEXT ENCODER ===
         elif nk.startswith("text_encoder.embeddings."):
@@ -72,15 +111,36 @@ def remap_sota_state_dict(state_dict):
         elif nk.startswith("txt_proj.proj."):
             nk = nk.replace("txt_proj.proj.", "text_proj.mlp.")
 
-        # Bỏ qua logit_scale (không có trong MultimodalModel)
+        # Bỏ qua logit_scale cấp top (không có trong MultimodalModel)
         elif nk == "logit_scale":
             skipped.append(k)
             continue
 
         new_sd[nk] = v
 
+    # ── Sau khi duyệt xong, MERGE Q/K/V → attn.qkv.weight ──────
+    # timm SwinV2 layout:
+    #   attn.qkv.weight  shape [3 * head_dim, embed_dim]
+    #   attn.q_bias      shape [head_dim]
+    #   attn.v_bias      shape [head_dim]   (không có k_bias)
+    n_merged = 0
+    for attn_prefix, bucket in qkv_buckets.items():
+        if "q_weight" in bucket and "k_weight" in bucket and "v_weight" in bucket:
+            qkv_w = torch.cat([bucket["q_weight"],
+                                bucket["k_weight"],
+                                bucket["v_weight"]], dim=0)
+            new_sd[f"{attn_prefix}.qkv.weight"] = qkv_w
+            n_merged += 1
+
+        if "q_bias" in bucket:
+            new_sd[f"{attn_prefix}.q_bias"] = bucket["q_bias"]
+        if "v_bias" in bucket:
+            new_sd[f"{attn_prefix}.v_bias"] = bucket["v_bias"]
+        # k_bias bị bỏ qua — timm SwinV2 không dùng k_bias
+
     if skipped:
         print(f"   ℹ️  Bỏ qua {len(skipped)} keys không tương thích: {skipped[:3]}...")
+    print(f"   ✅ Remap xong: {len(new_sd)} keys (đã gộp {n_merged} QKV attention blocks)")
     return new_sd
 
 
@@ -186,6 +246,7 @@ def main():
             print(f"   📐 Tự động nhận diện Text  Proj: input={txt_input_dim}, hidden={txt_hidden_dim}")
         else:
             txt_hidden_dim = 2048
+            txt_input_dim  = 768
 
         # Determine embed_dim from the last layer of image_proj
         last_proj_w = state_dict.get("image_proj.mlp.3.weight")
@@ -204,7 +265,7 @@ def main():
 
         state_dict = fix_state_dict(state_dict, model.state_dict().keys())
         
-        # --- LỌC BỎ KEY BỊ LỖII KÍCH THƯỚC TRƯỚC KHI LOAD ---
+        # --- LỌC BỎ KEY BỊ LỖI KÍCH THƯỚC TRƯỚC KHI LOAD ---
         model_sd = model.state_dict()
         filtered_sd = {}
         skipped_size = []
@@ -230,6 +291,8 @@ def main():
         n_total = len(model_sd)
         n_missing = len(msg.missing_keys)
         print(f"\n✨ Nạp model xong! Loaded: {n_loaded}/{n_total} keys | Missing: {n_missing}")
+        if n_missing > 0:
+            print(f"   Missing keys: {msg.missing_keys[:10]}")
         
         if n_missing > n_total * 0.5:
             print(f"   🚨 CẢNH BÁO NGHIÊM TRỌNG: >50% keys bị thiếu!")
