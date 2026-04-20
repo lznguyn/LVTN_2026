@@ -82,6 +82,12 @@ def load_sota_model(checkpoint_path, config, device):
     n_total   = len(model_sd)
     n_missing = len(msg.missing_keys)
     print(f"✅ Nạp xong: {n_loaded}/{n_total} keys | Missing: {n_missing}")
+    if n_missing > 0:
+        print(f"   🔍 Missing keys (top 20):")
+        for mk in msg.missing_keys[:20]:
+            print(f"      - {mk}")
+        if n_missing > 20:
+            print(f"      ... và {n_missing - 20} keys khác")
     if n_missing > n_total * 0.5:
         print("   ⚠️  CẢNH BÁO: >50% keys thiếu – kết quả KHÔNG có nghĩa!")
 
@@ -245,6 +251,20 @@ def main():
     val_df = pd.read_csv(config['data']['val_csv'])
     print(f"📊 Val set: {len(val_df)} mẫu")
 
+    # --- Load cluster_id từ soft labels để demo hiện 🟡 Cluster match ---
+    soft_label_path = os.path.join("data", "processed", "soft_labels_val.npy")
+    if os.path.exists(soft_label_path):
+        soft_labels = np.load(soft_label_path)          # shape (N, K)
+        hard_clusters = soft_labels.argmax(axis=1)       # hard cluster_id
+        if len(hard_clusters) == len(val_df):
+            val_df = val_df.copy()
+            val_df['cluster_id'] = hard_clusters
+            print(f"✅ Đã gán cluster_id cho {len(val_df)} mẫu ({soft_labels.shape[1]} clusters)")
+        else:
+            print(f"⚠️  Số mẫu soft_labels ({len(hard_clusters)}) ≠ val_df ({len(val_df)}) — bỏ qua cluster")
+    else:
+        print(f"ℹ️  Không tìm thấy soft_labels_val.npy — demo sẽ chỉ hiện Strict match")
+
     image_dir = args.image_dir
 
     # ── Auto-detect trên Kaggle ───────────────────────────────
@@ -322,10 +342,27 @@ def main():
     hit_i2t = (top_i2t.indices[0].item() == query_idx)
     hit_t2i = (top_t2i.indices[0].item() == query_idx)
 
+    # Cluster-aware R@1: đúng nếu exact match HOẶC cùng cluster
+    def cluster_hit(top_indices, query_idx, val_df):
+        top1_idx = top_indices[0].item()
+        if top1_idx == query_idx:
+            return True, "✅ Exact"
+        if 'cluster_id' in val_df.columns:
+            q_cl = val_df.iloc[query_idx]['cluster_id']
+            r_cl = val_df.iloc[top1_idx]['cluster_id']
+            if q_cl == r_cl and q_cl != -1:
+                return True, "🟡 Cluster"
+        return False, "❌ MISS"
+
+    hit_i2t_cl, label_i2t = cluster_hit(top_i2t.indices, query_idx, val_df)
+    hit_t2i_cl, label_t2i = cluster_hit(top_t2i.indices, query_idx, val_df)
+
     print("=" * 62)
     print("📋  TÓM TẮT")
-    print(f"   Image→Text R@1 : {'✅ HIT' if hit_i2t else '❌ MISS'}")
-    print(f"   Text→Image R@1 : {'✅ HIT' if hit_t2i else '❌ MISS'}")
+    print(f"   Image→Text  R@1 (Strict)  : {'✅ HIT' if hit_i2t else '❌ MISS'}")
+    print(f"   Image→Text  R@1 (Cluster) : {label_i2t}")
+    print(f"   Text→Image  R@1 (Strict)  : {'✅ HIT' if hit_t2i else '❌ MISS'}")
+    print(f"   Text→Image  R@1 (Cluster) : {label_t2i}")
     print("=" * 62)
 
 
