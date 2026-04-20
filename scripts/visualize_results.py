@@ -159,7 +159,10 @@ def plot_comparative_t2i(config, ckpt_a, ckpt_b, query_text, val_loader, device,
         # 1. Encode Query Text
         inputs = tokenizer(query_str, return_tensors='pt', padding=True, truncation=True, max_length=128).to(device)
         with torch.no_grad():
-            _, query_embed = model(None, inputs['input_ids'], inputs['attention_mask'], text_only=True)
+            # Gọi trực tiếp qua encoder và projector để tránh gọi forward() bị thiếu tham số
+            query_features = model.text_encoder(inputs['input_ids'], inputs['attention_mask'])
+            query_embed = model.text_proj(query_features)
+            query_embed = torch.nn.functional.normalize(query_embed, dim=-1)
             
         # 2. Encode Images
         all_img_embeds = []
@@ -168,7 +171,12 @@ def plot_comparative_t2i(config, ckpt_a, ckpt_b, query_text, val_loader, device,
         with torch.no_grad():
             for batch in tqdm(loader, desc=desc, leave=False):
                 imgs = batch['image'].to(device)
-                img_embeds, _ = model(imgs, None, None, image_only=True)
+                
+                # Gọi trực tiếp qua encoder và projector ảnh
+                img_features = model.image_encoder(imgs)
+                img_embeds = model.image_proj(img_features)
+                img_embeds = torch.nn.functional.normalize(img_embeds, dim=-1)
+                
                 all_img_embeds.append(img_embeds.cpu())
                 
                 if len(all_images_raw) < 100: 
