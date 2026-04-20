@@ -199,14 +199,36 @@ def main():
 
     # ── Auto-detect checkpoint trên Kaggle nếu không truyền --checkpoint ──
     if args.checkpoint is None:
-        SOTA_DIR = "/kaggle/input/my-sota-model"
-        if os.path.isdir(SOTA_DIR):
-            pts = [f for f in os.listdir(SOTA_DIR) if f.endswith('.pt') or f.endswith('.pth')]
-            if pts:
-                args.checkpoint = os.path.join(SOTA_DIR, sorted(pts)[-1])
-                print(f"   🤖 Auto-detect checkpoint: {args.checkpoint}")
-        if args.checkpoint is None:
-            parser.error("Chưa tìm thấy checkpoint. Dùng --checkpoint <path> để chỉ rõ.")
+        # Các thư mục gốc cần tìm (Kaggle có 2 kiểu path)
+        KAGGLE_SEARCH_ROOTS = [
+            "/kaggle/input",                        # Dataset gắn thông thường
+            "/kaggle/input/datasets",               # Dataset user-uploaded (nguyenabc/...)
+        ]
+        print("   🔍 Đang tìm file checkpoint (.pt/.pth) ...")
+        found_pts = []
+        for search_root in KAGGLE_SEARCH_ROOTS:
+            if not os.path.exists(search_root):
+                continue
+            for root, dirs, files in os.walk(search_root):
+                for fname in files:
+                    if fname.endswith('.pt') or fname.endswith('.pth'):
+                        full_path = os.path.join(root, fname)
+                        if full_path not in found_pts:
+                            found_pts.append(full_path)
+        if found_pts:
+            # Ưu tiên file lớn nhất (thường là model weights)
+            found_pts.sort(key=lambda p: os.path.getsize(p), reverse=True)
+            args.checkpoint = found_pts[0]
+            print(f"   🤖 Auto-detect checkpoint: {args.checkpoint}")
+            if len(found_pts) > 1:
+                print(f"   ℹ️  Tìm thấy {len(found_pts)} files, dùng file lớn nhất.")
+                for p in found_pts[1:3]:
+                    print(f"      - {p} ({os.path.getsize(p)//1024//1024} MB)")
+        else:
+            print("   ⚠️  Không tìm thấy. Dùng --checkpoint <path> để chỉ rõ.")
+
+    if args.checkpoint is None:
+        parser.error("Chưa tìm thấy checkpoint. Dùng --checkpoint <path> để chỉ rõ.")
 
     print("=" * 62)
     print("🚀  DEMO SOTA MODEL — Kiểm Tra Nhanh 1 Mẫu")
