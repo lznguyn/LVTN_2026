@@ -127,11 +127,14 @@ def main():
     # ---------------------------------------------------
 
     # Tao thu muc chua tep file .pth Weights cuoi cung
-    history_path = os.path.join(config['training']['checkpoint_dir'], "training_history.csv")
+    checkpoint_dir = config['training']['checkpoint_dir']
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    history_path = os.path.join(checkpoint_dir, "training_history.csv")
+    history = []
     
     # --- [RESUME LOGIC] ---
     start_epoch = 1
-    last_ckpt_path = os.path.join(config['training']['checkpoint_dir'], "last_checkpoint.pth")
+    last_ckpt_path = os.path.join(checkpoint_dir, "last_checkpoint.pth")
     if os.path.exists(last_ckpt_path):
         checkpoint = trainer.load_checkpoint(last_ckpt_path)
         if checkpoint:
@@ -143,7 +146,7 @@ def main():
                 try:
                     history = pd.read_csv(history_path).to_dict('records')
                 except:
-                    history = []
+                    pass # history remains []
     # ----------------------
 
     eval_every = config['training'].get('eval_every_n_epochs', 1)
