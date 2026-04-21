@@ -124,6 +124,7 @@ def parse_xml_to_csv(xml_dir, images_dir, projections_csv, output_csv):
 
                 # Tạo bản ghi ghép giữa Văn bản, Đường dẫn ảnh và View Type
                 data_list.append({
+                    "uid": xml_filename.split('.')[0], # Thêm Patient ID từ tên file XML
                     "image_id": img_id,
                     "image_path": img_path,
                     "report": report_text,
@@ -199,7 +200,7 @@ def parse_kaggle_to_csv(kaggle_dir, output_csv):
     print(f"✅ Filtered {len(df)}/{initial_count} valid image-report pairs.")
 
     # Chọn lọc các cột cần thiết để đồng bộ với pipeline hiện tại
-    output_df = df[['image_id', 'image_path', 'report', 'projection']]
+    output_df = df[['uid', 'image_id', 'image_path', 'report', 'projection']]
     
     # Giữ toàn bộ ảnh (Frontal + Lateral) để tối đa số mẫu training
     print(f"🖼️  Giữ toàn bộ {len(output_df)} ảnh (Frontal + Lateral).")
@@ -239,11 +240,11 @@ if __name__ == "__main__":
         if success:
             exit(0)
         else:
-            print("⚠️ Có lỗi khi xử lý dữ liệu Kaggle, đang chuyển sang tải thủ công...")
+            print("Warning: Error processing Kaggle data, switching to manual download...")
     else:
-        print("🔍 Không tìm thấy bộ dữ liệu trong /kaggle/input. Đang chuyển sang tải từ internet...")
+        print("Searching for dataset in /kaggle/input... No Kaggle data found. Switching to internet download...")
 
-    # --- THÔNG TIN NGUỒN TẢI (Trường hợp không dùng Kaggle Dataset có sẵn) ---
+    # --- DOWNLOAD SOURCES ---
     # Nguồn: Indiana University Chest X-Rays (Khoảng ~4000 báo cáo và ~7500 bức ảnh)
     REPORTS_URL = "https://openi.nlm.nih.gov/imgs/collections/NLMCXR_reports.tgz"
     IMAGES_URL = "https://openi.nlm.nih.gov/imgs/collections/NLMCXR_png.tgz"
