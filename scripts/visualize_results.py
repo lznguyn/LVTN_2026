@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from transformers import AutoTokenizer
 from sklearn.manifold import TSNE
+from sklearn.metrics import silhouette_score
 import argparse
 import yaml
 from PIL import Image
@@ -134,6 +135,52 @@ def plot_joint_tsne(img_embeds, txt_embeds, clusters, output_path="results/joint
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"✅ Biểu đồ Joint Space đã được lưu tại: {output_path}")
+
+def calculate_silhouette_scores(img_embeds, txt_embeds, clusters):
+    """Tính toán và in chỉ số Silhouette cho không gian đặc trưng"""
+    if clusters is None:
+        print("⚠️ Không có thông tin cụm (clusters) để tính Silhouette.")
+        return
+
+    print("\n📊 --- SILHOUETTE SCORE ANALYSIS ---")
+    
+    # Chuyển sang numpy và lọc nhãn -1
+    # clusters có thể là tensor, cần đưa về cpu và numpy
+    c_np = clusters.cpu().numpy() if hasattr(clusters, 'cpu') else np.array(clusters)
+    mask = c_np != -1
+    
+    if mask.sum() < 2:
+        print("⚠️ Không đủ dữ liệu (có nhãn hợp lệ) để tính Silhouette.")
+        return
+
+    labels = c_np[mask]
+    
+    # Kiểm tra số lượng cụm duy nhất (phải >= 2)
+    unique_labels = np.unique(labels)
+    if len(unique_labels) < 2:
+        print(f"⚠️ Chỉ có {len(unique_labels)} cụm, không thể tính Silhouette Score (cần ít nhất 2).")
+        return
+
+    # Tính cho Image Embeddings
+    X_img = img_embeds.cpu().numpy()[mask] if hasattr(img_embeds, 'cpu') else img_embeds[mask]
+    print(f"⌛ Đang tính Silhouette cho Image Embeddings (N={len(X_img)})...")
+    img_score = silhouette_score(X_img, labels)
+    print(f"🖼️  Image Embeddings Silhouette: {img_score:.4f}")
+
+    # Tính cho Text Embeddings
+    X_txt = txt_embeds.cpu().numpy()[mask] if hasattr(txt_embeds, 'cpu') else txt_embeds[mask]
+    print(f"⌛ Đang tính Silhouette cho Text Embeddings (N={len(X_txt)})...")
+    txt_score = silhouette_score(X_txt, labels)
+    print(f"📝 Text Embeddings Silhouette:  {txt_score:.4f}")
+    
+    # Giải thích kết quả
+    if img_score > 0.4 or txt_score > 0.4:
+        print("➡️ Nhận xét: Các cụm phân tách rõ rệt (Tốt).")
+    elif img_score > 0.1 or txt_score > 0.1:
+        print("➡️ Nhận xét: Các cụm có cấu trúc nhưng vẫn chồng lấn (Khá).")
+    else:
+        print("➡️ Nhận xét: Các cụm chồng lấn mạnh hoặc không có cấu trúc cụm rõ ràng.")
+    print("------------------------------------\n")
 
 def plot_comparative_t2i(config, ckpt_a, ckpt_b, query_text, val_loader, device, output_path="results/comparative_t2i.png"):
     """Vẽ biểu đồ so sánh Top-3 ảnh giữa 2 mô hình cho cùng 1 câu query"""
@@ -348,6 +395,7 @@ def main():
     
     if args.mode in ['tsne', 'all']:
         img_embeds, txt_embeds, clusters = evaluate_retrieval(model, val_loader, device, return_embeds=True)
+        calculate_silhouette_scores(img_embeds, txt_embeds, clusters)
         plot_tsne(img_embeds, txt_embeds, clusters, df=val_df, lang=args.lang)
         plot_joint_tsne(img_embeds, txt_embeds, clusters, lang=args.lang)
         

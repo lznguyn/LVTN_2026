@@ -1,6 +1,7 @@
 import torch
 import torch.optim as optim
 import copy
+import os
 from tqdm import tqdm
 from src.losses.contrastive import ClusteringGuidedContrastiveLoss
 
@@ -130,6 +131,47 @@ class MultimodalTrainer:
         lr_b, lr_p = self.get_lr()
         print(f"✅ Hết Epoch {epoch} - Trung bình Loss: {avg_loss:.4f} | LR_b: {lr_b:.2e} | LR_p: {lr_p:.2e}")
         return avg_loss
+
+    def save_checkpoint(self, path, epoch, best_r1, extra=None):
+        """Lưu toàn bộ trạng thái huấn luyện để có thể Resume sau này"""
+        state = {
+            'epoch': epoch,
+            'best_r1': best_r1,
+            'model_state_dict': (self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model).state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict(),
+            'config': self.config
+        }
+        if self.scaler:
+            state['scaler_state_dict'] = self.scaler.state_dict()
+        if extra:
+            state.update(extra)
+        
+        torch.save(state, path)
+        # print(f"💾 Đã lưu checkpoint đầy đủ tại: {path}")
+
+    def load_checkpoint(self, path):
+        """Nạp lại toàn bộ trạng thái từ checkpoint"""
+        if not os.path.exists(path):
+            print(f"⚠️ Không tìm thấy checkpoint tại: {path}")
+            return None
+            
+        print(f"🔄 Đang nạp checkpoint từ: {path}...")
+        checkpoint = torch.load(path, map_location=self.device)
+        
+        # Nạp trọng số Model
+        model_module = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
+        model_module.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Nạp trạng thái Optimizer & Scheduler
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        if self.scaler and 'scaler_state_dict' in checkpoint:
+            self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            
+        print(f"✅ Đã khôi phục trạng thái tại Epoch {checkpoint['epoch']} (Best R@1: {checkpoint.get('best_r1', 0):.2f}%)")
+        return checkpoint
 
     def validate(self, dataloader, epoch):
         self.model.eval()

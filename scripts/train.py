@@ -127,45 +127,71 @@ def main():
     # ---------------------------------------------------
 
     # Tao thu muc chua tep file .pth Weights cuoi cung
-    os.makedirs(config['training']['checkpoint_dir'], exist_ok=True)
-    
-    history = []
     history_path = os.path.join(config['training']['checkpoint_dir'], "training_history.csv")
+    
+    # --- [RESUME LOGIC] ---
+    start_epoch = 1
+    last_ckpt_path = os.path.join(config['training']['checkpoint_dir'], "last_checkpoint.pth")
+    if os.path.exists(last_ckpt_path):
+        checkpoint = trainer.load_checkpoint(last_ckpt_path)
+        if checkpoint:
+            start_epoch = checkpoint['epoch'] + 1
+            best_r1 = checkpoint.get('best_r1', -1.0)
+            print(f"⏩ Đang tiếp tục huấn luyện từ Epoch {start_epoch}...")
+            # Load history if exists
+            if os.path.exists(history_path):
+                try:
+                    history = pd.read_csv(history_path).to_dict('records')
+                except:
+                    history = []
+    # ----------------------
 
-    for epoch in range(1, epochs + 1):
+    eval_every = config['training'].get('eval_every_n_epochs', 1)
+
+    for epoch in range(start_epoch, epochs + 1):
         train_loss = trainer.train_epoch(train_loader, epoch)
         val_loss = trainer.validate(val_loader, epoch)
         
-        # --- ĐÁNH GIÁ R@1 SAU MỖI EPOCH ---
-        print(f"\n📊 Đang đánh giá R@1 (Clustering-Guided) cho Epoch {epoch}...")
+        # --- ĐÁNH GIÁ R@1 (Theo định kỳ) ---
         current_r1 = 0.0
-        try:
-            # [CHÍNH] Đánh giá trên TOÀN BỘ dataset (train+val) để R@K không bị nhỏ/nhiễu
-            r_strict, r_cluster = evaluate_retrieval(trainer.model, full_loader, device)
-            
-            print(f"✅ Epoch {epoch} [Strict]  - R@1: {r_strict[0]:.2f}% | R@5: {r_strict[1]:.2f}%")
-            print(f"✅ Epoch {epoch} [Cluster] - R@1: {r_cluster[0]:.2f}% | R@5: {r_cluster[1]:.2f}% | R@10: {r_cluster[2]:.2f}%")
-            
-            # --- LƯU NHẬT KÝ (LOGGING) ---
+        if epoch % eval_every == 0 or epoch == epochs:
+            print(f"\n📊 Đang đánh giá R@1 (Clustering-Guided) cho Epoch {epoch}...")
+            try:
+                # [CHÍNH] Đánh giá trên TOÀN BỘ dataset (train+val) để R@K không bị nhỏ/nhiễu
+                r_strict, r_cluster = evaluate_retrieval(trainer.model, full_loader, device)
+                
+                print(f"✅ Epoch {epoch} [Strict]  - R@1: {r_strict[0]:.2f}% | R@5: {r_strict[1]:.2f}%")
+                print(f"✅ Epoch {epoch} [Cluster] - R@1: {r_cluster[0]:.2f}% | R@5: {r_cluster[1]:.2f}% | R@10: {r_cluster[2]:.2f}%")
+                
+                # --- LƯU NHẬT KÝ (LOGGING) ---
+                history.append({
+                    'epoch': epoch,
+                    'train_loss': train_loss,
+                    'val_loss': val_loss,
+                    'r1_strict': r_strict[0],
+                    'r5_strict': r_strict[1],
+                    'r1_cluster': r_cluster[0],
+                    'r5_cluster': r_cluster[1],
+                    'r10_cluster': r_cluster[2]
+                })
+                pd.DataFrame(history).to_csv(history_path, index=False)
+                
+                current_r1 = r_cluster[0]
+            except Exception as e:
+                print(f"⚠️ Lỗi khi đánh giá R@1: {e}")
+        else:
+            print(f"⏩ Epoch {epoch}: Bỏ qua đánh giá R@K (Config: eval_every_n_epochs={eval_every})")
+            # Lưu log cơ bản
             history.append({
                 'epoch': epoch,
                 'train_loss': train_loss,
-                'val_loss': val_loss,
-                'r1_strict': r_strict[0],
-                'r5_strict': r_strict[1],
-                'r1_cluster': r_cluster[0],
-                'r5_cluster': r_cluster[1],
-                'r10_cluster': r_cluster[2]
+                'val_loss': val_loss
             })
             pd.DataFrame(history).to_csv(history_path, index=False)
             
-            current_r1 = r_cluster[0]
-        except Exception as e:
-            print(f"⚠️ Lỗi khi đánh giá R@1: {e}")
-            
-        # Lưu checkpoint tốt nhất (lưu weights để suy luận chính xác hơn)
+        # Lưu checkpoint tốt nhất (chỉ lưu weights để suy luận/inference)
         is_best = False
-        if current_r1 > best_r1:
+        if current_r1 > best_r1 and current_r1 > 0:
             best_r1 = current_r1
             is_best = True
             ckpt_path = os.path.join(config['training']['checkpoint_dir'], "best_model.pth")
@@ -175,10 +201,13 @@ def main():
             torch.save(model_module.state_dict(), ckpt_path)
             print(f"⭐ [CÓ CẢI THIỆN R@1 = {best_r1:.2f}%] - Lưu weights vào: {ckpt_path}")
 
-        # --- LUÔN LƯU LAST MODEL ĐỂ DỰ PHÒNG ---
-        last_ckpt_path = os.path.join(config['training']['checkpoint_dir'], "last_model.pth")
+        # --- LUÔN LƯU FULL CHECKPOINT ĐỂ RESUME ---
+        trainer.save_checkpoint(last_ckpt_path, epoch, best_r1)
+        
+        # Lưu bản weigths cuối cùng (last_model.pth) để dễ so sánh
+        last_weights_path = os.path.join(config['training']['checkpoint_dir'], "last_model.pth")
         model_module = trainer.model.module if isinstance(trainer.model, torch.nn.DataParallel) else trainer.model
-        torch.save(model_module.state_dict(), last_ckpt_path)
+        torch.save(model_module.state_dict(), last_weights_path)
 
         # --- TỰ ĐỘNG BACKUP VÀO BÊN TRONG GOOGLE DRIVE (CHO COLAB) ---
         drive_roots = ["/content/drive/MyDrive", "/content/drive/My Drive"]
@@ -192,8 +221,9 @@ def main():
                     shutil.copy(ckpt_path, os.path.join(drive_dir, "best_model.pth"))
                     print(f"✅ Đã backup best_model.pth vào Drive: {drive_dir}")
                 
-                # Backup bản last
-                shutil.copy(last_ckpt_path, os.path.join(drive_dir, "last_model.pth"))
+                # Backup bản full checkpoint để đề phòng mất session Colab
+                shutil.copy(last_ckpt_path, os.path.join(drive_dir, "last_checkpoint.pth"))
+                print(f"✅ Đã backup last_checkpoint.pth vào Drive")
                 break
 
         # --- LƯU Ý CHO KAGGLE ---
