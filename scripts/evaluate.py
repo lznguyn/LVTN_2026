@@ -34,19 +34,32 @@ def get_transforms(image_size):
 
 def fix_state_dict(state_dict, model_keys):
     """
-    Sửa lỗi mapping tên giữa các bản timm (layers.0 vs layers_0).
-    Tự động nhận diện format mà model hiện tại đang yêu cầu dựa trên model_keys.
+    Sửa lỗi mapping tên giữa các bản timm và xử lý thay đổi kiến trúc (thêm Dropout).
     """
     has_layers_dot = any("layers." in k for k in model_keys)
     has_layers_underscore = any("layers_" in k for k in model_keys)
     
+    # Kiểm tra xem model hiện tại có dùng cấu trúc MLP mới (có Dropout nên layer index bị đẩy lên) hay không
+    is_new_model = any(".mlp.5." in k for k in model_keys)
+    is_old_checkpoint = is_new_model and not any(".mlp.5." in k for k in state_dict.keys())
+    
     new_state_dict = {}
     for k, v in state_dict.items():
         new_k = k
+        
+        # 1. Sửa lỗi timm (layers. vs layers_)
         if has_layers_dot and "layers_" in k:
-            new_k = k.replace("layers_", "layers.")
+            new_k = new_k.replace("layers_", "layers.")
         elif has_layers_underscore and "layers." in k:
-            new_k = k.replace("layers.", "layers_")
+            new_k = new_k.replace("layers.", "layers_")
+            
+        # 2. Xử lý ánh xạ lại lớp Projection nếu nạp model cũ vào kiến trúc mới (có Dropout)
+        if is_old_checkpoint:
+            if ".mlp.4." in new_k:
+                new_k = new_k.replace(".mlp.4.", ".mlp.5.")
+            elif ".mlp.3." in new_k:
+                new_k = new_k.replace(".mlp.3.", ".mlp.4.")
+                
         new_state_dict[new_k] = v
     return new_state_dict
 
