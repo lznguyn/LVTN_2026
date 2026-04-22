@@ -362,15 +362,18 @@ def main():
     config = load_config(args.config)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    # 1. Load Data (Dùng chung cho tất cả các mode)
-    print("📂 Đang nạp dữ liệu Validation...")
+    # 1. Load Data (Gộp Train + Val để Visualization đẹp hơn)
+    print("📂 Đang nạp toàn bộ dữ liệu (Train + Val)...")
+    train_df = pd.read_csv(config['data']['train_csv'])
     val_df = pd.read_csv(config['data']['val_csv'])
-    val_df['image_path'] = val_df['image_path'].apply(patch_path)
+    full_df = pd.concat([train_df, val_df], ignore_index=True)
+    
+    full_df['image_path'] = full_df['image_path'].apply(patch_path)
     
     tokenizer = AutoTokenizer.from_pretrained(config['model']['text_encoder'])
     transform = get_transforms(config['data']['image_size'])
-    val_dataset = MedicalImageTextDataset(val_df, transform, tokenizer)
-    val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'], shuffle=False)
+    full_dataset = MedicalImageTextDataset(full_df, transform, tokenizer)
+    val_loader = DataLoader(full_dataset, batch_size=config['training']['batch_size'], shuffle=False)
 
     # 2. Xử lý theo từng Mode
     if args.mode == 'compare':

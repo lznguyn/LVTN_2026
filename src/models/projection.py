@@ -8,8 +8,10 @@ class ProjectionHead(nn.Module):
             nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
+            nn.Dropout(0.2), # <--- Thêm Dropout sau GELU
             nn.Linear(hidden_dim, output_dim),
-            nn.LayerNorm(output_dim)
+            nn.LayerNorm(output_dim),
+            nn.Dropout(0.2)  # <--- Thêm Dropout lớp cuối
         )
 
     def forward(self, x):

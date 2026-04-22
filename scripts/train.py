@@ -160,8 +160,8 @@ def main():
         if epoch % eval_every == 0 or epoch == epochs:
             print(f"\n📊 Đang đánh giá R@1 (Clustering-Guided) cho Epoch {epoch}...")
             try:
-                # [CHÍNH] Đánh giá trên TOÀN BỘ dataset (train+val) để R@K không bị nhỏ/nhiễu
-                r_strict, r_cluster = evaluate_retrieval(trainer.model, full_loader, device)
+                # [ĐÃ SỬA] Chỉ đánh giá trên tập VALIDATION để có cái nhìn trung thực về khả năng tổng quát hóa
+                r_strict, r_cluster = evaluate_retrieval(trainer.model, val_loader, device)
                 
                 print(f"✅ Epoch {epoch} [Strict]  - R@1: {r_strict[0]:.2f}% | R@5: {r_strict[1]:.2f}%")
                 print(f"✅ Epoch {epoch} [Cluster] - R@1: {r_cluster[0]:.2f}% | R@5: {r_cluster[1]:.2f}% | R@10: {r_cluster[2]:.2f}%")

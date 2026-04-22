@@ -3,9 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class ClusteringGuidedContrastiveLoss(nn.Module):
-    def __init__(self, temperature=0.07):
+    def __init__(self, temperature=0.07, fn_penalty=5.0):
         super().__init__()
         self.temperature = temperature
+        self.fn_penalty = fn_penalty # <--- Cho phép cấu hình mức phạt False Negatives
 
     def forward(self, image_embeds, text_embeds, cluster_ids, soft_labels=None):
         """
@@ -33,15 +34,17 @@ class ClusteringGuidedContrastiveLoss(nn.Module):
             soft_fn_mask = semantic_overlap * (1 - positive_mask)
             
             # --- CƠ CHẾ SOFT MASKING (Phiên bản Luận văn - Task 3) ---
-            # Giảm penalty factor từ 20.0 xuống 10.0 để tránh đẩy quá gắt
-            logits_per_image = logits_per_image - (soft_fn_mask * 10.0)
-            logits_per_text = logits_per_text - (soft_fn_mask * 10.0)
+            # Giảm penalty factor từ 10.0 xuống 5.0 để tránh làm tác vụ học quá "dễ"
+            logits_per_image = logits_per_image - (soft_fn_mask * self.fn_penalty)
+            logits_per_text = logits_per_text - (soft_fn_mask * self.fn_penalty)
         else:
             # Fallback về Hard Masking nếu không có nhãn mềm
             cluster_ids = cluster_ids.view(-1, 1)
             cluster_mask = torch.eq(cluster_ids, cluster_ids.t()).float().to(device)
             positive_mask = torch.eye(batch_size).to(device)
             false_negative_mask = cluster_mask - positive_mask
+            # Sử dụng fn_penalty thay vì fix cứng -10000 (nếu muốn) 
+            # Nhưng ở chế độ Hard, ta vẫn nên giữ mask mạnh
             logits_per_image = logits_per_image.masked_fill(false_negative_mask.bool(), -10000.0)
             logits_per_text = logits_per_text.masked_fill(false_negative_mask.bool(), -10000.0)
         
