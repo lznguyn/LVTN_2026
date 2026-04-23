@@ -19,22 +19,31 @@ def extract_zip(zip_path, extract_to):
 
 def find_mimic_files():
     """Tìm kiếm file ZIP trong các dataset đã add vào Kaggle"""
-    search_dirs = ["/kaggle/input", "/kaggle/working/LVTN_2026/data/raw"]
-    files_found = {}
+    # Lấy đường dẫn gốc của project
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     
+    search_dirs = [
+        "/kaggle/input", 
+        os.path.join(base_dir, "data", "raw"),
+        "data/raw" # Thử đường dẫn tương đối
+    ]
+    
+    files_found = {}
     target_files = {
         "images": "MIMIC_Processed_512.zip",
         "reports": "mimic-cxr-reports.zip",
         "metadata": "mimic-cxr-2.0.0-metadata.csv.gz"
     }
     
+    print(f"🔍 Đang tìm kiếm file trong: {search_dirs}")
     for base in search_dirs:
         if not os.path.exists(base): continue
-        for root, dirs, files in os.walk(base):
-            for f in files:
+        for root, dirs, filenames in os.walk(base):
+            for f in filenames:
                 for key, target in target_files.items():
                     if f == target:
                         files_found[key] = os.path.join(root, f)
+                        print(f"✨ Tìm thấy {key}: {files_found[key]}")
     return files_found
 
 def main():
