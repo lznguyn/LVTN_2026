@@ -158,28 +158,31 @@ def main():
         # --- ĐÁNH GIÁ R@1 (Theo định kỳ) ---
         current_r1 = 0.0
         if epoch % eval_every == 0 or epoch == epochs:
-            print(f"\n📊 Đang đánh giá R@1 (Clustering-Guided) cho Epoch {epoch}...")
             try:
-                # [ĐÃ SỬA] Chỉ đánh giá trên tập VALIDATION để có cái nhìn trung thực về khả năng tổng quát hóa
-                r_strict, r_cluster = evaluate_retrieval(trainer.model, val_loader, device)
+                # [MỚI] Đánh giá trên cả tập Validation và Full Dataset
+                print(f"🔍 Đang đánh giá trên tập Validation...")
+                r_strict_val, r_cluster_val = evaluate_retrieval(trainer.model, val_loader, device)
                 
-                print(f"✅ Epoch {epoch} [Strict]  - R@1: {r_strict[0]:.2f}% | R@5: {r_strict[1]:.2f}%")
-                print(f"✅ Epoch {epoch} [Cluster] - R@1: {r_cluster[0]:.2f}% | R@5: {r_cluster[1]:.2f}% | R@10: {r_cluster[2]:.2f}%")
+                print(f"🔍 Đang đánh giá trên tập Full Dataset (Train + Val)...")
+                r_strict_full, r_cluster_full = evaluate_retrieval(trainer.model, full_loader, device)
+                
+                print(f"\n📊 KẾT QUẢ ĐÁNH GIÁ EPOCH {epoch}:")
+                print(f"   🔹 [Validation] R@1 (Cluster): {r_cluster_val[0]:.2f}% | R@10: {r_cluster_val[2]:.2f}%")
+                print(f"   🔸 [Full Data]  R@1 (Cluster): {r_cluster_full[0]:.2f}% | R@10: {r_cluster_full[2]:.2f}%")
                 
                 # --- LƯU NHẬT KÝ (LOGGING) ---
                 history.append({
                     'epoch': epoch,
                     'train_loss': train_loss,
                     'val_loss': val_loss,
-                    'r1_strict': r_strict[0],
-                    'r5_strict': r_strict[1],
-                    'r1_cluster': r_cluster[0],
-                    'r5_cluster': r_cluster[1],
-                    'r10_cluster': r_cluster[2]
+                    'r1_cluster_val': r_cluster_val[0],
+                    'r10_cluster_val': r_cluster_val[2],
+                    'r1_cluster_full': r_cluster_full[0],
+                    'r10_cluster_full': r_cluster_full[2]
                 })
                 pd.DataFrame(history).to_csv(history_path, index=False)
                 
-                current_r1 = r_cluster[0]
+                current_r1 = r_cluster_full[0]
             except Exception as e:
                 print(f"⚠️ Lỗi khi đánh giá R@1: {e}")
         else:
