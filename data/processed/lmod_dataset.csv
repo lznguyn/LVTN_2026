@@ -1,0 +1,3 @@
+image_id,image_path,report
+LMOD_001,data/raw/images/1_IM-0001-4001.dcm.png,"Võng mạc bình thường."
+LMOD_002,data/raw/images/1_IM-0001-3001.dcm.png,"Có dấu hiệu xuất huyết võng mạc."

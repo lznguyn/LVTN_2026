@@ -2,6 +2,8 @@
 data:
   train_csv: "data/splits/train.csv"
   val_csv: "data/splits/val.csv"
+  ext_eval_csv: "data/processed/lmod_dataset.csv" # Đường dẫn tới LMOD sau khi tải
+  ext_eval_img_dir: ""                            # Tiền tố thư mục ảnh nếu cần
   image_size: 256
   max_text_length: 128
 
