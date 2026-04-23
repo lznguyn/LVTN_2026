@@ -139,7 +139,7 @@ def main():
                 print(f"Evaluating Validation...")
                 r_strict_val, r_cluster_val = evaluate_retrieval(trainer.model, val_loader, device)
                 
-                label_full = "LMOD" if ext_csv and os.path.exists(ext_csv) else "Full Data"
+                label_full = "MIMIC" if ext_csv and os.path.exists(ext_csv) else "Full Data"
                 print(f"Evaluating {label_full}...")
                 r_strict_full, r_cluster_full = evaluate_retrieval(trainer.model, full_loader, device)
                 
@@ -148,8 +148,9 @@ def main():
                     'r1_val': r_cluster_val[0], 'r1_full': r_cluster_full[0]
                 })
                 pd.DataFrame(history).to_csv(history_path, index=False)
-                current_r1 = r_cluster_full[0]
-                print(f"Epoch {epoch} - R@1 [{label_full}]: {current_r1:.2f}%")
+                
+                print(f"Epoch {epoch} - R@1 [IU-Xray]: {r_cluster_val[0]:.2f}% | R@1 [{label_full}]: {r_cluster_full[0]:.2f}%")
+                current_r1 = r_cluster_val[0] # Lưu best model dựa trên IU-Xray (tập chính)
             except Exception as e:
                 print(f"Evaluation error: {e}")
         

@@ -111,31 +111,58 @@ def parse_kaggle_to_csv(kaggle_dir, output_csv):
     print(f"✅ Kaggle IU-Xray transformed with {len(output_df)} samples.")
     return True
 
-def prepare_lmod_dataset(raw_dir, processed_dir):
-    print("\n=== STEP 3: PREPARE OPHTHALMOLOGY DATASET (ODIR/LMOD) ===")
-    lmod_raw_path = os.path.join(raw_dir, "LMOD")
-    output_csv = os.path.join(processed_dir, "lmod_dataset.csv")
-    if not os.path.exists(lmod_raw_path):
-        print("⚠️ LMOD source not found. Run !kaggle datasets download -d andrewmvd/ocular-disease-recognition-odir5k --unzip -p data/raw/LMOD")
+def prepare_mimic_dataset(raw_dir, processed_dir):
+    """
+    Hỗ trợ bộ dữ liệu MIMIC-CXR (thường là subset trên Kaggle).
+    """
+    print("\n=== STEP 3: PREPARE MIMIC-CXR DATASET ===")
+    # Tìm kiếm folder MIMIC trong raw_dir
+    mimic_raw_path = ""
+    for folder in ["MIMIC", "MIMIC-CXR", "mimic-cxr-jpg"]:
+        test_path = os.path.join(raw_dir, folder)
+        if os.path.exists(test_path):
+            mimic_raw_path = test_path
+            break
+    
+    output_csv = os.path.join(processed_dir, "mimic_dataset.csv")
+
+    if not mimic_raw_path:
+        print(f"⚠️ Không tìm thấy folder MIMIC tại {raw_dir}")
+        print("💡 Nếu bạn dùng Kaggle, hãy add dataset MIMIC-CXR subset.")
+        # Tạo file mock để không crash
         pd.DataFrame([{"uid":"dummy","image_id":"dummy","image_path":"dummy.png","report":"dummy","projection":"Unknown"}]).to_csv(output_csv, index=False)
         return
-    
+
     data = []
-    odir_csv = os.path.join(lmod_raw_path, "full_df.csv")
-    if os.path.exists(odir_csv):
-        df_odir = pd.read_csv(odir_csv)
-        img_dir = os.path.join(lmod_raw_path, "preprocessed_images")
-        if not os.path.exists(img_dir): img_dir = lmod_raw_path
-        for _, row in df_odir.iterrows():
-            for eye in ['Left', 'Right']:
-                img_name = row[f'{eye}-Fundus']
-                img_path = os.path.abspath(os.path.join(img_dir, str(img_name)))
+    # Logic phổ biến cho các bản MIMIC subset trên Kaggle (thường có file CSV đi kèm)
+    csv_files = [f for f in os.listdir(mimic_raw_path) if f.endswith('.csv')]
+    
+    if csv_files:
+        print(f"Found CSV metadata: {csv_files[0]}")
+        df_mimic = pd.read_csv(os.path.join(mimic_raw_path, csv_files[0]))
+        
+        # Cố gắng map các cột phổ biến (study_id, report, path)
+        path_col = next((c for c in df_mimic.columns if 'path' in c.lower() or 'file' in c.lower()), None)
+        text_col = next((c for c in df_mimic.columns if 'report' in c.lower() or 'text' in c.lower() or 'caption' in c.lower()), None)
+        
+        if path_col and text_col:
+            for _, row in tqdm(df_mimic.head(5000).iterrows(), total=min(len(df_mimic), 5000)):
+                img_path = os.path.join(mimic_raw_path, str(row[path_col]))
                 if os.path.exists(img_path):
-                    data.append({"uid": str(row['ID']), "image_id": img_name, "image_path": img_path, "report": row[f'{eye}-Diagnostic Keywords'], "projection": eye})
+                    data.append({
+                        "uid": str(row.get('subject_id', 'unknown')),
+                        "image_id": str(row.get('dicom_id', 'unknown')),
+                        "image_path": os.path.abspath(img_path),
+                        "report": str(row[text_col]),
+                        "projection": str(row.get('ViewPosition', 'Unknown'))
+                    })
     
     if data:
         pd.DataFrame(data).to_csv(output_csv, index=False)
-        print(f"✅ ODIR Dataset created: {len(data)} samples.")
+        print(f"✅ MIMIC Dataset created: {len(data)} samples.")
+    else:
+        print("❌ Không thể parse được cấu trúc MIMIC hiện tại. Đang tạo mock file.")
+        pd.DataFrame([{"uid":"dummy","image_id":"dummy","image_path":"dummy.png","report":"dummy","projection":"Unknown"}]).to_csv(output_csv, index=False)
 
 if __name__ == "__main__":
     BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -170,4 +197,4 @@ if __name__ == "__main__":
             parse_xml_to_csv(os.path.join(RAW_DIR, "reports", "ecgen-radiology"), os.path.join(RAW_DIR, "images"), projections_csv, OUTPUT_CSV)
         except Exception as e: print(f"Error: {e}")
 
-    prepare_lmod_dataset(RAW_DIR, PROCESSED_DIR)
+    prepare_mimic_dataset(RAW_DIR, PROCESSED_DIR)
