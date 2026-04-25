@@ -2,23 +2,23 @@
 data:
   train_csv: "data/splits/train.csv"
   val_csv: "data/splits/val.csv"
-  image_size: 256
+  image_size: 384
   max_text_length: 128
 
 model:
-  embed_dim: 512
+  embed_dim: 768
   image_encoder: "swinv2_base_window12to16_192to256"
   text_encoder: "emilyalsentzer/Bio_ClinicalBERT"
-  temperature: 0.1
+  temperature: 0.07
 
 training:
-  batch_size: 32             # <--- Giảm xuống 32 (16 ảnh / 1 GPU) để chống OOM
-  gradient_accumulation_steps: 8  # <--- Tổng batch thực tế = 32 * 4 = 128
+  batch_size: 16             # <--- Giảm xuống 16 do dùng 384px (tốn VRAM hơn)
+  gradient_accumulation_steps: 16 # <--- Tổng batch thực tế = 16 * 16 = 256 (giữ nguyên độ ổn định)
   epochs: 100
-  lr: 0.00003                 # <--- Giảm xuống 3e-5 (Trước đây 5e-5)
-  warmup_epochs: 5
+  lr: 0.00001                 # <--- Giảm xuống 1e-5 để hội tụ sâu hơn và ổn định hơn
+  warmup_epochs: 10           # <--- Tăng warmup để thích nghi với độ phân giải cao
   backbone_lr_ratio: 10
-  weight_decay: 0.1           # <--- Tăng lên 0.1 (Trước đây 0.05) để chống Overfitting
+  weight_decay: 0.1
   num_workers: 4
   max_steps_per_epoch: null  # <--- Học hết toàn bộ tập dữ liệu mỗi epoch
   eval_every_n_epochs: 1      # <--- Tần suất đánh giá R@K (Ví dụ: 5 để chạy nhanh hơn)

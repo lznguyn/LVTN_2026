@@ -3,10 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class ClusteringGuidedContrastiveLoss(nn.Module):
-    def __init__(self, temperature=0.07, fn_penalty=5.0):
+    def __init__(self, temperature=0.07, fn_penalty=3.0):
         super().__init__()
         self.temperature = temperature
-        self.fn_penalty = fn_penalty # <--- Cho phép cấu hình mức phạt False Negatives
+        self.fn_penalty = fn_penalty # <--- Giảm xuống 3.0 để Model phải phân biệt gắt hơn giữa các mẫu tương đồng
 
     def forward(self, image_embeds, text_embeds, cluster_ids, soft_labels=None):
         """
