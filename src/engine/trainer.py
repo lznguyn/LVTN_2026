@@ -40,7 +40,9 @@ class MultimodalTrainer:
         )
         
         self.criterion = ClusteringGuidedContrastiveLoss(
-            temperature=config['model']['temperature']
+            temperature=config['model']['temperature'],
+            feature_dim=config['model']['embed_dim'],
+            queue_size=1024  # Thêm Memory Bank cho batch size nhỏ
         ).to(device)
 
         # --- TỐI ƯU: Scheduler với Warmup ---
