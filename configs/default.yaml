@@ -7,7 +7,7 @@ data:
 
 model:
   embed_dim: 768
-  image_encoder: "swinv2_base_window12to16_192to256"
+  image_encoder: "swinv2_base_window12to24_192to384"
   text_encoder: "emilyalsentzer/Bio_ClinicalBERT"
   temperature: 0.07
 
