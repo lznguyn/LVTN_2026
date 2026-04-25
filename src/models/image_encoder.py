@@ -7,7 +7,8 @@ class SwinTransformerV2Encoder(nn.Module):
         self,
         model_name='swinv2_tiny_window16_256',
         pretrained=True,
-        features_only=False
+        features_only=False,
+        img_size=None
     ):
         super().__init__()
 
@@ -18,7 +19,8 @@ class SwinTransformerV2Encoder(nn.Module):
             model_name,
             pretrained=pretrained,
             num_classes=0 if not features_only else None,
-            features_only=features_only
+            features_only=features_only,
+            img_size=img_size
         )
         
         if features_only:

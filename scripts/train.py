@@ -113,7 +113,8 @@ def main():
     model = MultimodalModel(
         image_encoder_name=config['model']['image_encoder'],
         text_model_name=config['model']['text_encoder'],
-        embed_dim=config['model']['embed_dim']
+        embed_dim=config['model']['embed_dim'],
+        image_size=config['data']['image_size']
     )
     
     print(f"Tổng số tham số mạng lưu giữ: {sum(p.numel() for p in model.parameters() if p.requires_grad):,} Parameters")
