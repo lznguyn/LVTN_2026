@@ -16,7 +16,7 @@ training:
   gradient_accumulation_steps: 32 # <--- Tăng lên 32 để tổng batch thực tế vẫn = 256
   epochs: 100
   lr: 0.00001                 # <--- Giảm xuống 1e-5 để hội tụ sâu hơn và ổn định hơn
-  warmup_epochs: 10           # <--- Tăng warmup để thích nghi với độ phân giải cao
+  warmup_epochs: 5           # <--- Tăng warmup để thích nghi với độ phân giải cao
   backbone_lr_ratio: 10
   weight_decay: 0.1
   num_workers: 4
