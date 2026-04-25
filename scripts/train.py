@@ -7,6 +7,7 @@ import shutil
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from transformers import AutoTokenizer
+from sklearn.model_selection import train_test_split
 
 import sys
 # Gắn thư mục gốc vào đường dẫn hệ thống để dễ gọi các modules
@@ -66,17 +67,25 @@ def main():
     print("[2] Đang Load Database...")
     try:
         train_df = pd.read_csv(config['data']['train_csv'])
-        val_df = pd.read_csv(config['data']['val_csv'])
+        val_df_old = pd.read_csv(config['data']['val_csv'])
         
         # --- MỚI: Load nhãn cụm MỀM (Soft Labels) ---
         processed_dir = "data/processed"
         train_soft = np.load(os.path.join(processed_dir, "soft_labels_train.npy"))
-        val_soft   = np.load(os.path.join(processed_dir, "soft_labels_val.npy"))
-        print(f"✅ Đã nạp nhãn mềm GMM: Train {train_soft.shape} | Val {val_soft.shape}")
+        val_soft_old = np.load(os.path.join(processed_dir, "soft_labels_val.npy"))
         
-        # --- FULL DATASET: Gộp train + val để đánh giá R@K toàn bộ ---
-        full_df   = pd.concat([train_df, val_df], ignore_index=True)
-        full_soft = np.concatenate([train_soft, val_soft], axis=0)
+        # --- CHIA TẬP VAL CŨ THÀNH VAL MỚI VÀ EVAL ---
+        # Tách 50% tập Val cũ làm tập Eval chuyên dụng cho đánh giá R@1
+        # Điều này giúp theo dõi Val Loss (trên Val mới) và Metric (trên Eval) độc lập
+        val_df, eval_df, val_soft, eval_soft = train_test_split(
+            val_df_old, val_soft_old, test_size=0.5, random_state=42
+        )
+        print(f"✅ Đã chia tập Val cũ ({len(val_df_old)}) -> Val mới: {len(val_df)} | Eval: {len(eval_df)}")
+        print(f"✅ Đã nạp nhãn mềm GMM: Train {train_soft.shape} | Val {val_soft.shape} | Eval {eval_soft.shape}")
+        
+        # --- FULL DATASET: Gộp tất cả để đánh giá R@K nếu cần ---
+        full_df   = pd.concat([train_df, val_df, eval_df], ignore_index=True)
+        full_soft = np.concatenate([train_soft, val_soft, eval_soft], axis=0)
         print(f"✅ Full Dataset: {len(full_df)} mẫu | Soft Labels {full_soft.shape}")
     except Exception as e:
         print(f"❌ Lỗi khi load dữ liệu: {e}")
@@ -85,8 +94,9 @@ def main():
 
     train_dataset = MedicalImageTextDataset(train_df, train_transform, tokenizer, config['data']['max_text_length'], soft_labels=train_soft)
     val_dataset   = MedicalImageTextDataset(val_df,   val_transform,   tokenizer, config['data']['max_text_length'], soft_labels=val_soft)
+    eval_dataset  = MedicalImageTextDataset(eval_df,  val_transform,   tokenizer, config['data']['max_text_length'], soft_labels=eval_soft)
     
-    # Full dataset (train + val) — không augmentation, dùng cho evaluate_retrieval
+    # Full dataset — không augmentation, dùng cho evaluate_retrieval nếu cần
     full_dataset  = MedicalImageTextDataset(full_df,  val_transform,   tokenizer, config['data']['max_text_length'], soft_labels=full_soft)
     
     # Sửa lỗi Threading/Crash của hệ điều hành Windows khi gọi num_workers > 0
@@ -94,7 +104,8 @@ def main():
     
     train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], shuffle=True,  num_workers=num_workers)
     val_loader   = DataLoader(val_dataset,   batch_size=config['training']['batch_size'], shuffle=False, num_workers=num_workers)
-    # Full loader: đánh giá R@K trên toàn bộ dataset → số liệu ổn định, không bị nhỏ
+    eval_loader  = DataLoader(eval_dataset,  batch_size=config['training']['batch_size'], shuffle=False, num_workers=num_workers)
+    # Full loader: đánh giá R@K trên toàn bộ dataset
     full_loader  = DataLoader(full_dataset,  batch_size=config['training']['batch_size'], shuffle=False, num_workers=num_workers)
     
     # 2. GIAI ĐOẠN KHỞI TẠO NEURAL NETWORK
@@ -160,8 +171,8 @@ def main():
         if epoch % eval_every == 0 or epoch == epochs:
             print(f"\n📊 Đang đánh giá R@1 (Clustering-Guided) cho Epoch {epoch}...")
             try:
-                # [ĐÃ SỬA] Chỉ đánh giá trên tập VALIDATION để có cái nhìn trung thực về khả năng tổng quát hóa
-                r_strict, r_cluster = evaluate_retrieval(trainer.model, val_loader, device)
+                # [ĐÃ SỬA] Đánh giá trên tập EVAL chuyên biệt (tách từ Val cũ) để khách quan hơn
+                r_strict, r_cluster = evaluate_retrieval(trainer.model, eval_loader, device)
                 
                 print(f"✅ Epoch {epoch} [Strict]  - R@1: {r_strict[0]:.2f}% | R@5: {r_strict[1]:.2f}%")
                 print(f"✅ Epoch {epoch} [Cluster] - R@1: {r_cluster[0]:.2f}% | R@5: {r_cluster[1]:.2f}% | R@10: {r_cluster[2]:.2f}%")
