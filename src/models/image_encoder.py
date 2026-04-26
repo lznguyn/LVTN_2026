@@ -14,7 +14,6 @@ class SwinTransformerV2Encoder(nn.Module):
 
         self.features_only = features_only
         
-        # num_classes=0 => bỏ head classification, lấy feature embedding sau pooling
         self.model = timm.create_model(
             model_name,
             pretrained=pretrained,
@@ -22,6 +21,10 @@ class SwinTransformerV2Encoder(nn.Module):
             features_only=features_only,
             img_size=img_size
         )
+        
+        # Bật Gradient Checkpointing để tiết kiệm VRAM, hỗ trợ Batch Size khổng lồ
+        if hasattr(self.model, 'set_grad_checkpointing'):
+            self.model.set_grad_checkpointing(True)
         
         if features_only:
             # Lấy thông tin chiều sâu của Feature Map cuối cùng

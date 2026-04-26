@@ -12,10 +12,10 @@ model:
   temperature: 0.07
 
 training:
-  batch_size: 8              # <--- Giảm xuống 8 do dùng 384px (Tránh lỗi OOM)
-  gradient_accumulation_steps: 32 # <--- Tăng lên 32 để tổng batch thực tế vẫn = 256
+  batch_size: 64              # <--- Tăng lên 64 (Đã có Gradient Checkpointing chống OOM)
+  gradient_accumulation_steps: 1  # <--- Tắt Accumulation vì Batch Size đã đủ lớn
   epochs: 100
-  lr: 0.00005                 # <--- Tăng lên 5e-5 để có đủ lực học không gian 1024 negatives của Memory Bank
+  lr: 0.0001                  # <--- Tăng LR lên 1e-4 để phù hợp với Batch Size lớn
   warmup_epochs: 5           # <--- Tăng warmup để thích nghi với độ phân giải cao
   backbone_lr_ratio: 10
   weight_decay: 0.1
