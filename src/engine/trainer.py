@@ -29,6 +29,10 @@ class MultimodalTrainer:
         backbone_params = list(model_module.image_encoder.parameters()) + list(model_module.text_encoder.parameters())
         projector_params = list(model_module.image_proj.parameters()) + list(model_module.text_proj.parameters())
         
+        # Thêm Learnable Temperature vào nhóm Projector để tối ưu hóa
+        if hasattr(model_module, 'logit_scale'):
+            projector_params.append(model_module.logit_scale)
+        
         params_groups = [
             {'params': backbone_params, 'lr': lr_backbone, 'name': 'backbone'},
             {'params': projector_params, 'lr': lr_projector, 'name': 'projector'}
@@ -95,8 +99,9 @@ class MultimodalTrainer:
             # --- TỐI ƯU: Mixed Precision + Accumulation ---
             device_type = 'cuda' if 'cuda' in str(self.device) else 'cpu'
             with torch.amp.autocast(device_type=device_type):
-                img_embeds, txt_embeds = self.model(images, input_ids, attention_mask)
-                loss = self.criterion(img_embeds, txt_embeds, cluster_ids, soft_labels=soft_labels)
+                # Bắt thêm logit_scale từ model
+                img_embeds, txt_embeds, logit_scale = self.model(images, input_ids, attention_mask)
+                loss = self.criterion(img_embeds, txt_embeds, cluster_ids, soft_labels=soft_labels, logit_scale=logit_scale)
                 # Chia loss cho số bước tích lũy
                 loss = loss / accum_steps
             
@@ -187,11 +192,12 @@ class MultimodalTrainer:
                 cluster_ids = batch['cluster_id'].to(self.device, non_blocking=True)
                 soft_labels = batch['soft_label'].to(self.device, non_blocking=True)
                 
-                img_embeds, txt_embeds = self.model(
+                # Bắt thêm logit_scale từ model
+                img_embeds, txt_embeds, logit_scale = self.model(
                     images, input_ids, attention_mask
                 )
                 
-                loss = self.criterion(img_embeds, txt_embeds, cluster_ids, soft_labels=soft_labels)
+                loss = self.criterion(img_embeds, txt_embeds, cluster_ids, soft_labels=soft_labels, logit_scale=logit_scale)
                 total_loss += loss.item()
                 pbar.set_postfix({"Val Loss": f"{loss.item():.4f}"})
                 

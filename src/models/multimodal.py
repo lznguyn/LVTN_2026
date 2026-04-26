@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 from .image_encoder import SwinTransformerV2Encoder
 from .text_encoder import MedicalTextEncoder
 from .projection import ProjectionHead
@@ -15,6 +16,8 @@ class MultimodalModel(nn.Module):
         self.image_proj = ProjectionHead(self.image_encoder.feature_dim, embed_dim)
         self.text_proj = ProjectionHead(self.text_encoder.feature_dim, embed_dim)
         
+        # Learnable Temperature parameter
+        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
         self.embed_dim = embed_dim
 
     def forward(self, images, text_input_ids, text_attention_mask):
@@ -28,4 +31,4 @@ class MultimodalModel(nn.Module):
         img_embeds = nn.functional.normalize(img_embeds, dim=-1)
         txt_embeds = nn.functional.normalize(txt_embeds, dim=-1)
         
-        return img_embeds, txt_embeds
+        return img_embeds, txt_embeds, self.logit_scale

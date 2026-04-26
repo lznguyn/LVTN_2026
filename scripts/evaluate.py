@@ -97,7 +97,7 @@ def evaluate_retrieval(model, dataloader, device, return_embeds=False):
         images = batch['image'].to(device)
         input_ids = batch['input_ids'].to(device)
         attention_mask = batch['attention_mask'].to(device)
-        img_embeds, txt_embeds = model(images, input_ids, attention_mask)
+        img_embeds, txt_embeds, _ = model(images, input_ids, attention_mask)
         
         all_img_embeds.append(img_embeds.cpu())
         all_txt_embeds.append(txt_embeds.cpu())

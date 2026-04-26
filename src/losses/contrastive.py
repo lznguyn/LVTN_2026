@@ -8,7 +8,7 @@ class ClusteringGuidedContrastiveLoss(nn.Module):
         self.temperature = temperature
         self.fn_penalty = fn_penalty
 
-    def forward(self, image_embeds, text_embeds, cluster_ids, soft_labels=None):
+    def forward(self, image_embeds, text_embeds, cluster_ids, soft_labels=None, logit_scale=None):
         """
         image_embeds: (Batch, D) - Đặc trưng ảnh đã chuẩn hóa L2
         text_embeds: (Batch, D)  - Đặc trưng text đã chuẩn hóa L2
@@ -19,7 +19,13 @@ class ClusteringGuidedContrastiveLoss(nn.Module):
         batch_size = image_embeds.size(0)
         
         # 1. Tính toán ma trận Tương đồng Cosine cơ bản
-        logits_per_image = torch.matmul(image_embeds, text_embeds.t()) / self.temperature
+        if logit_scale is not None:
+            # Giới hạn cực đại để tránh Gradient nổ (max=100)
+            logit_scale_val = torch.clamp(logit_scale.exp(), max=100)
+            logits_per_image = logit_scale_val * torch.matmul(image_embeds, text_embeds.t())
+        else:
+            logits_per_image = torch.matmul(image_embeds, text_embeds.t()) / self.temperature
+            
         logits_per_text = logits_per_image.t()
         
         # 2. Xử lý Trọng số Mềm (Soft Masking)
