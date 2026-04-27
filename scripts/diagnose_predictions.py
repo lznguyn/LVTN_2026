@@ -84,7 +84,11 @@ def main():
     if "384" in args.checkpoint:
         img_enc_name = "swinv2_base_window12_384"
         
-    model = MultimodalModel(img_enc_name, config['model']['text_encoder']).to(device)
+    model = MultimodalModel(
+        img_enc_name, 
+        config['model']['text_encoder'],
+        embed_dim=config['model'].get('embed_dim', 512)
+    ).to(device)
     
     print(f"Loading checkpoint {args.checkpoint}...")
     state_dict = torch.load(args.checkpoint, map_location=device)
@@ -92,7 +96,7 @@ def main():
         state_dict = state_dict['model_state_dict']
         
     state_dict = fix_state_dict(state_dict, model.state_dict().keys())
-    model.load_state_dict(state_dict, strict=True)
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
 
     all_img_embeds = []
