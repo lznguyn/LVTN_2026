@@ -101,6 +101,10 @@ class MultimodalTrainer:
             with torch.amp.autocast(device_type=device_type):
                 # Bắt thêm logit_scale từ model
                 img_embeds, txt_embeds, logit_scale = self.model(images, input_ids, attention_mask)
+                # Fix DataParallel: logit_scale bị unsqueeze thành (num_gpus,) thay vì scalar
+                # -> Lấy mean để đưa về scalar trước khi tính loss
+                if logit_scale.dim() > 0:
+                    logit_scale = logit_scale.mean()
                 loss = self.criterion(img_embeds, txt_embeds, cluster_ids, soft_labels=soft_labels, logit_scale=logit_scale)
                 # Chia loss cho số bước tích lũy
                 loss = loss / accum_steps
@@ -196,7 +200,9 @@ class MultimodalTrainer:
                 img_embeds, txt_embeds, logit_scale = self.model(
                     images, input_ids, attention_mask
                 )
-                
+                # Fix DataParallel: logit_scale bị unsqueeze thành (num_gpus,) thay vì scalar
+                if logit_scale.dim() > 0:
+                    logit_scale = logit_scale.mean()
                 loss = self.criterion(img_embeds, txt_embeds, cluster_ids, soft_labels=soft_labels, logit_scale=logit_scale)
                 total_loss += loss.item()
                 pbar.set_postfix({"Val Loss": f"{loss.item():.4f}"})
